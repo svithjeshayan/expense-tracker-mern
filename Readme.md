@@ -70,8 +70,6 @@ expense-tracker-mern/
 │ └── vite.config.js
 └── README.md
 
-yaml
-Copy code
 
 ---
 
