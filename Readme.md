@@ -1,113 +1,147 @@
-# Expense Tracker - MERN Stack
+# 💰 Money Manager - Advanced Expense Tracker (MERN)
 
-A full-stack **Expense Tracker** application built with the MERN stack (**MongoDB, Express.js, React, Node.js**). This app helps users track income and expenses, set monthly budgets, visualize spending with charts, and manage personal finances effectively.  
+![Version](https://img.shields.io/badge/version-1.0.0-blue.svg)
+![License](https://img.shields.io/badge/license-MIT-green.svg)
+![React](https://img.shields.io/badge/frontend-React_Vite-61DAFB.svg)
+![Node](https://img.shields.io/badge/backend-Node_Express-339933.svg)
+![MongoDB](https://img.shields.io/badge/database-MongoDB-47A248.svg)
 
-**Live Demo:** [Add your deployed link here]  
-
-**Repository:** [GitHub Link](https://github.com/svithjeshayan/expense-tracker-mern)  
-
----
-
-## Features
-
-- User authentication (Register/Login with JWT)  
-- Add, edit, delete transactions (income/expense)  
-- Categorize expenses (Food, Transport, Shopping, etc.)  
-- Set monthly budgets per category with progress tracking  
-- Interactive dashboard with stats (total income, expenses, balance)  
-- Data visualization using **Recharts** (line, bar, pie charts)  
-- Export transactions to CSV  
-- Responsive design with **Tailwind CSS** and **Lucide icons**
+**Money Manager** is a comprehensive, full-stack personal finance application designed to help users track expenses, manage budgets, and visualize financial trends. Built with the MERN stack (MongoDB, Express, React, Node.js), it features a highly responsive mobile-first design, robust security with 2FA, and real-time analytics.
 
 ---
 
-## Tech Stack
+## ✨ Key Features
 
-### Frontend
-- **React.js** (Vite)  
-- **Tailwind CSS**  
-- **Lucide React** (icons)  
-- **Recharts** (charts)  
-- **Axios** (API calls)  
+### 📱 User Experience (10/10)
 
-### Backend
-- **Node.js**  
-- **Express.js**  
-- **MongoDB** (with Mongoose)  
-- **JWT** (authentication)  
-- **Bcrypt** (password hashing)  
+- **Fluid Reponsive Design**: Optimized for everything from usage on large desktop monitors to compact mobile devices like the **iPhone SE**.
+- **Mobile-First Navigation**: Native-app style bottom navigation bar for mobile users.
+- **Dark Mode**: Fully supported system-wide dark theme.
+- **PWA Support**: Installable as a Progressive Web App (PWA) with offline capabilities.
+- **Glassmorphism UI**: Premium visual aesthetics with blur effects and smooth micro-animations.
 
----
+### 🛡️ Security & Reliability
 
-## Architecture Overview
+- **Two-Factor Authentication (2FA)**: Secure login with TOTP (Google Authenticator).
+- **Secure Sessions**: HTTP-Only cookies and JWT authentication.
+- **Audit Logging**: Comprehensive tracking of all security-critical actions.
+- **Rate Limiting & CSP**: Protection against brute-force and XSS attacks.
 
-This project follows the **MERN stack architecture**:
+### 📊 Financial Tools
 
-1. **Frontend** (React + Tailwind CSS) handles the UI and user interactions.  
-2. **Backend** (Node.js + Express.js) manages APIs, authentication, and business logic.  
-3. **MongoDB** stores users, transactions, and budget data.  
-4. **JWT** secures authentication.  
-5. **Recharts** is used for interactive data visualizations.  
+- **Dashboard**: Real-time overview of custom Equity, Assets, and Liabilities.
+- **Expense Tracking**: Detailed categorised logging of income and expenses.
+- **Trend Analysis**: Predictive insights and month-over-month comparisons.
+- **Budget Management**: Set and track monthly limits per category with visual alerts.
+- **Data Export**: Export your financial history to CSV for external analysis.
 
 ---
 
-## Project Structure
+## 🚀 Tech Stack
 
-expense-tracker-mern/
-├── backend/
-│ ├── config/ # DB connection
-│ ├── middleware/ # Auth middleware
-│ ├── models/ # User, Expense, Budget schemas
-│ ├── routes/ # Auth, expenses, budgets
-│ ├── .env.example
-│ └── server.js
-├── frontend/
-│ ├── src/
-│ │ ├── components/ # UI components
-│ │ ├── App.jsx # Main app logic
-│ │ └── api/ # Axios instance
-│ ├── public/
-│ └── vite.config.js
-└── README.md
-
-yaml
-Copy code
+- **Frontend**: React 18, Vite, TailwindCSS, Recharts, Lucide Icons.
+- **Backend**: Node.js, Express, Mongoose.
+- **Database**: MongoDB Atlas.
+- **Testing**: Jest, Supertest, Vitest.
 
 ---
 
-## Setup & Installation
+## 🛠️ Installation & Setup
 
 ### Prerequisites
-- **Node.js** (v18+)  
-- **MongoDB** (local or MongoDB Atlas)  
 
-### 1. Clone the repository
+- Node.js (v18+)
+- MongoDB Atlas Account (or local MongoDB)
+
+### 1. Clone the Repository
+
 ```bash
-git clone https://github.com/svithjeshayan/expense-tracker-mern.git
-cd expense-tracker-mern
-2. Backend Setup
-bash
-Copy code
+git clone https://github.com/yourusername/money-manager.git
+cd money-manager
+```
+
+### 2. Backend Setup
+
+```bash
 cd backend
 npm install
-cp .env.example .env   # Edit .env with your MongoDB URI and JWT secret
-npm run dev            # Starts server on http://localhost:5000
-3. Frontend Setup
-bash
-Copy code
-cd ../frontend
-npm install
-npm run dev            # Starts Vite dev server on http://localhost:5173
-Environment Variables (.env in backend)
-env
-Copy code
+```
+
+Create a `.env` file in the `backend` directory (see `.env.example`):
+
+```env
 PORT=5000
-MONGODB_URI=your_mongodb_connection_string
-JWT_SECRET=your_strong_secret_key
+MONGO_URI=your_mongodb_connection_string
+JWT_SECRET=your_jwt_strong_secret
 NODE_ENV=development
-Deployment
-Frontend: Deploy on Vercel or Netlify
+CLIENT_URL=http://localhost:5173
+```
 
-Backend: Deploy on Render, Heroku, or Cyclic
+Start the server:
 
-Database: Use MongoDB Atlas for production
+```bash
+npm run dev
+```
+
+### 3. Frontend Setup
+
+Open a new terminal:
+
+```bash
+cd frontend
+npm install
+```
+
+Start the development server:
+
+```bash
+npm run dev
+```
+
+---
+
+## 🧪 Running Tests
+
+**Backend Tests:**
+
+```bash
+cd backend
+npm test
+```
+
+**Frontend Tests:**
+
+```bash
+cd frontend
+npm test
+```
+
+---
+
+## 📁 Project Structure
+
+```
+MERN/
+├── backend/            # Express API
+│   ├── config/         # DB & Passport config
+│   ├── jobs/           # Cron jobs (Budget Alerts)
+│   ├── middleware/     # Auth, Rate Limiting
+│   ├── models/         # Mongoose Schemas
+│   ├── routes/         # API Routes
+│   └── jobs/           # Scheduled tasks
+│
+├── frontend/           # React App
+│   ├── src/
+│   │   ├── components/ # Reusable UI Components
+│   │   ├── test/       # Integration Tests
+│   │   └── App.jsx     # Main Application Logic
+│   └── public/         # Static Assets & PWA Icons
+│
+└── README.md           # Documentation
+```
+
+---
+
+## 📄 License
+
+This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.

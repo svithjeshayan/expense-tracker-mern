@@ -21,6 +21,18 @@ const UserSchema = new mongoose.Schema({
     type: String,
     default: 'USD'
   },
+  twoFactorSecret: {
+    type: String,
+    default: null
+  },
+  twoFactorEnabled: {
+    type: Boolean,
+    default: false
+  },
+  twoFactorBackupCodes: [{
+    code: String,
+    used: { type: Boolean, default: false }
+  }],
   notificationPreferences: {
     budgetAlerts: {
       type: Boolean,

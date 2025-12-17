@@ -1,8 +1,13 @@
 import React, { useState, useEffect } from 'react';
-import { PlusCircle, TrendingUp, TrendingDown, Wallet, Download, Edit2, Trash2, Save, X, DollarSign, LogOut, User, Moon, Sun, Search, Filter, ChevronLeft, ChevronRight, RefreshCw, Calendar, FileText, Bell, Tag, Plus, BarChart3 } from 'lucide-react';
+import { PlusCircle, TrendingUp, TrendingDown, Wallet, Download, Edit2, Trash2, Save, X, DollarSign, LogOut, User, Moon, Sun, Search, Filter, ChevronLeft, ChevronRight, RefreshCw, Calendar, FileText, Bell, Tag, Plus, BarChart3, Shield, Globe, Smartphone, Settings, Key, Copy, Check, Table as TableIcon, List } from 'lucide-react';
 import { LineChart, Line, BarChart, Bar, PieChart as RechartsPie, Pie, Cell, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer, AreaChart, Area } from 'recharts';
 import api from './api/axios';
 import { generatePDFReport } from './utils/pdfGenerator';
+import { queueOperation, processQueue } from './services/queue';
+import DashboardView from './components/DashboardView';
+import ExpensesView from './components/ExpensesView';
+import SettingsView from './components/SettingsView';
+import MobileBottomNav from './components/MobileBottomNav';
 
 // Default categories - will be replaced by user's custom categories
 const DEFAULT_EXPENSE_CATEGORIES = [
@@ -33,8 +38,8 @@ export default function ExpenseTracker() {
   const [isLogin, setIsLogin] = useState(true);
   const [authForm, setAuthForm] = useState({ name: '', email: '', password: '' });
   const [loading, setLoading] = useState(false);
+  const [authLoading, setAuthLoading] = useState(true);
   const [darkMode, setDarkMode] = useState(false);
-  const [systemTheme, setSystemTheme] = useState('light');
   
   const [activeTab, setActiveTab] = useState('dashboard');
   const [expenses, setExpenses] = useState([]);
@@ -42,19 +47,14 @@ export default function ExpenseTracker() {
   const [recurringExpenses, setRecurringExpenses] = useState([]);
   const [categories, setCategories] = useState([]);
   const [trendData, setTrendData] = useState(null);
-  const [notificationPrefs, setNotificationPrefs] = useState({
-    budgetAlerts: true,
-    weeklyReports: false,
-    monthlyReports: false,
-    budgetThreshold: 80
-  });
+  const [currentDate, setCurrentDate] = useState(new Date());
+  const [expenseViewMode, setExpenseViewMode] = useState('table');
   
   const [showAddExpense, setShowAddExpense] = useState(false);
   const [showAddBudget, setShowAddBudget] = useState(false);
   const [showAddRecurring, setShowAddRecurring] = useState(false);
   const [showFilters, setShowFilters] = useState(false);
   const [showAddCategory, setShowAddCategory] = useState(false);
-  const [showNotificationSettings, setShowNotificationSettings] = useState(false);
   const [editingExpense, setEditingExpense] = useState(null);
   const [editingRecurring, setEditingRecurring] = useState(null);
   const [editingCategory, setEditingCategory] = useState(null);
@@ -100,6 +100,8 @@ export default function ExpenseTracker() {
     limit: '',
     month: new Date().toISOString().slice(0, 7)
   });
+  const [editingBudget, setEditingBudget] = useState(null);
+  const [selectedBudgetMonth, setSelectedBudgetMonth] = useState(new Date().toISOString().slice(0, 7));
 
   const [categoryForm, setCategoryForm] = useState({
     name: '',
@@ -108,12 +110,66 @@ export default function ExpenseTracker() {
     color: '#3b82f6'
   });
 
+  // 2FA State
+  const [twoFactorStatus, setTwoFactorStatus] = useState({ enabled: false, backupCodesRemaining: 0 });
+  const [show2FASetup, setShow2FASetup] = useState(false);
+  const [twoFASetupData, setTwoFASetupData] = useState(null);
+  const [twoFACode, setTwoFACode] = useState('');
+  const [backupCodes, setBackupCodes] = useState([]);
+  const [showBackupCodes, setShowBackupCodes] = useState(false);
+  const [requires2FA, setRequires2FA] = useState(false);
+  const [pending2FAUserId, setPending2FAUserId] = useState(null);
+
+  // Currency State
+  const [currencies, setCurrencies] = useState([]);
+  const [exchangeRates, setExchangeRates] = useState(null);
+  const [userCurrency, setUserCurrency] = useState({ currency: 'USD', symbol: '$', name: 'US Dollar' });
+
+  // PWA State
+  const [deferredPrompt, setDeferredPrompt] = useState(null);
+  const [showInstallPrompt, setShowInstallPrompt] = useState(false);
+  const [isInstalled, setIsInstalled] = useState(false);
+
+  // Helper: Format amount in user's currency
+  const formatAmount = (amount) => {
+    if (!exchangeRates || userCurrency.currency === 'USD') {
+      return new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(amount);
+    }
+    
+    // Convert from USD (base) to User Currency
+    const rate = exchangeRates[userCurrency.currency];
+    const converted = amount * (rate || 1);
+    
+    return new Intl.NumberFormat(navigator.language, { 
+      style: 'currency', 
+      currency: userCurrency.currency 
+    }).format(converted);
+  };
+
+  // Helper: Convert amount value only (for charts)
+  const convertAmount = (amount) => {
+    if (!exchangeRates || userCurrency.currency === 'USD') return amount;
+    return Number((amount * exchangeRates[userCurrency.currency]).toFixed(2));
+  };
+
+  // Offline Sync Listener
+  useEffect(() => {
+    const handleOnline = async () => {
+      console.log('Online! Syncing...');
+      const result = await processQueue();
+      if (result.count > 0) {
+        loadUserData();
+        alert(`Synced ${result.count} offline operations.`);
+      }
+    };
+    window.addEventListener('online', handleOnline);
+    return () => window.removeEventListener('online', handleOnline);
+  }, []);
+
   useEffect(() => {
     // Detect system theme preference
     const mediaQuery = window.matchMedia('(prefers-color-scheme: dark)');
     const handleThemeChange = (e) => {
-      const newTheme = e.matches ? 'dark' : 'light';
-      setSystemTheme(newTheme);
       
       // Only apply if user hasn't manually set a preference
       const savedTheme = localStorage.getItem('theme');
@@ -138,7 +194,6 @@ export default function ExpenseTracker() {
     } else {
       // Use system preference
       const prefersDark = mediaQuery.matches;
-      setSystemTheme(prefersDark ? 'dark' : 'light');
       setDarkMode(prefersDark);
       if (prefersDark) {
         document.documentElement.classList.add('dark');
@@ -153,6 +208,7 @@ export default function ExpenseTracker() {
     return () => {
       mediaQuery.removeEventListener('change', handleThemeChange);
     };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const toggleDarkMode = () => {
@@ -178,23 +234,22 @@ export default function ExpenseTracker() {
         localStorage.removeItem('token');
       }
     }
+    setAuthLoading(false);
   };
 
   const loadUserData = async () => {
     try {
-      const [expensesRes, budgetsRes, recurringRes, categoriesRes, notifPrefsRes] = await Promise.all([
+      const [expensesRes, budgetsRes, recurringRes, categoriesRes] = await Promise.all([
         api.get('/expenses'),
         api.get('/budgets'),
         api.get('/recurring').catch(() => ({ data: [] })),
-        api.get('/categories').catch(() => ({ data: [] })),
-        api.get('/notifications/preferences').catch(() => ({ data: { budgetAlerts: true, weeklyReports: false, monthlyReports: false, budgetThreshold: 80 } }))
+        api.get('/categories').catch(() => ({ data: [] }))
       ]);
       
       setExpenses(expensesRes.data);
       setBudgets(budgetsRes.data);
       setRecurringExpenses(recurringRes.data);
       setCategories(categoriesRes.data);
-      setNotificationPrefs(notifPrefsRes.data);
       
       // Initialize categories if none exist
       if (categoriesRes.data.length === 0) {
@@ -210,7 +265,6 @@ export default function ExpenseTracker() {
       // Set default category for forms
       if (categoriesRes.data.length > 0) {
         const firstExpenseCat = categoriesRes.data.find(c => c.type === 'expense');
-        const firstIncomeCat = categoriesRes.data.find(c => c.type === 'income');
         
         setExpenseForm(prev => ({ ...prev, category: firstExpenseCat?.name || '' }));
         setRecurringForm(prev => ({ ...prev, category: firstExpenseCat?.name || '' }));
@@ -227,6 +281,14 @@ export default function ExpenseTracker() {
     try {
       const endpoint = isLogin ? '/auth/login' : '/auth/register';
       const response = await api.post(endpoint, authForm);
+      
+      // Check if 2FA is required
+      if (response.data.requires2FA) {
+        setRequires2FA(true);
+        setPending2FAUserId(response.data.userId);
+        setLoading(false);
+        return;
+      }
       
       localStorage.setItem('token', response.data.token);
       setCurrentUser(response.data.user);
@@ -250,12 +312,34 @@ export default function ExpenseTracker() {
   const handleAddExpense = async (e) => {
     e.preventDefault();
     setLoading(true);
-    try {
-      const expenseData = {
-        ...expenseForm,
-        amount: parseFloat(expenseForm.amount)
-      };
+
+    const expenseData = {
+      ...expenseForm,
+      amount: parseFloat(expenseForm.amount)
+    };
+
+    // Offline Handling
+    if (!navigator.onLine) {
+      const tempId = Date.now().toString();
+      if (editingExpense) {
+        queueOperation('EDIT_EXPENSE', { id: editingExpense._id, updates: expenseData }, tempId);
+        // Optimistic UI Update
+        setExpenses(prev => prev.map(ex => ex._id === editingExpense._id ? { ...ex, ...expenseData } : ex));
+      } else {
+        queueOperation('ADD_EXPENSE', expenseData, tempId);
+        // Optimistic UI Update
+        setExpenses(prev => [{ ...expenseData, _id: tempId, date: new Date(expenseData.date).toISOString() }, ...prev]);
+      }
       
+      setShowAddExpense(false);
+      setEditingExpense(null);
+      resetExpenseForm();
+      setLoading(false);
+      alert('You are offline. Transaction saved locally and will sync when connected.');
+      return;
+    }
+
+    try {
       if (editingExpense) {
         await api.put(`/expenses/${editingExpense._id}`, expenseData);
       } else {
@@ -302,10 +386,18 @@ export default function ExpenseTracker() {
 
   const handleDeleteExpense = async (id) => {
     if (window.confirm('Are you sure you want to delete this transaction?')) {
+      // Offline Handling
+      if (!navigator.onLine) {
+        queueOperation('DELETE_EXPENSE', { id }, id);
+        setExpenses(prev => prev.filter(ex => ex._id !== id));
+        alert('You are offline. Deletion queued.');
+        return;
+      }
+
       try {
         await api.delete(`/expenses/${id}`);
         await loadUserData();
-      } catch (error) {
+      } catch {
         alert('Error deleting transaction');
       }
     }
@@ -316,7 +408,7 @@ export default function ExpenseTracker() {
       try {
         await api.delete(`/recurring/${id}`);
         await loadUserData();
-      } catch (error) {
+      } catch {
         alert('Error deleting recurring expense');
       }
     }
@@ -350,6 +442,38 @@ export default function ExpenseTracker() {
     setShowAddRecurring(true);
   };
 
+  const resetBudgetForm = () => {
+    setBudgetForm({
+      category: '',
+      limit: '',
+      month: selectedBudgetMonth
+    });
+    setEditingBudget(null);
+  };
+
+  const handleEditBudget = (budget) => {
+    setEditingBudget(budget);
+    setBudgetForm({
+      category: budget.category,
+      limit: budget.limit,
+      month: budget.month
+    });
+    setShowAddBudget(true);
+  };
+
+  const handleDeleteBudget = async (id) => {
+    if (!window.confirm('Are you sure you want to delete this budget?')) return;
+    try {
+      setLoading(true);
+      await api.delete(`/budgets/${id}`);
+      setBudgets(prev => prev.filter(b => b._id !== id));
+    } catch {
+      alert('Error deleting budget');
+    } finally {
+      setLoading(false);
+    }
+  };
+
   const handleAddBudget = async (e) => {
     e.preventDefault();
     setLoading(true);
@@ -358,16 +482,20 @@ export default function ExpenseTracker() {
         ...budgetForm,
         limit: parseFloat(budgetForm.limit)
       };
-      await api.post('/budgets', budgetData);
-      await loadUserData();
+
+      if (editingBudget) {
+        const response = await api.put(`/budgets/${editingBudget._id}`, budgetData);
+        setBudgets(prev => prev.map(b => b._id === editingBudget._id ? response.data : b));
+        alert('Budget updated successfully');
+      } else {
+        const response = await api.post('/budgets', budgetData);
+        setBudgets(prev => [...prev, response.data]);
+        alert('Budget set successfully');
+      }
       setShowAddBudget(false);
-      setBudgetForm({
-        category: 'Food & Dining',
-        limit: '',
-        month: new Date().toISOString().slice(0, 7)
-      });
+      resetBudgetForm();
     } catch (error) {
-      alert(error.response?.data?.message || 'Error setting budget');
+      alert(error.response?.data?.message || 'Error saving budget');
     } finally {
       setLoading(false);
     }
@@ -555,17 +683,6 @@ export default function ExpenseTracker() {
     setShowAddCategory(true);
   };
 
-  // Update notification preferences
-  const handleUpdateNotifications = async (prefs) => {
-    try {
-      await api.post('/notifications/preferences', prefs);
-      setNotificationPrefs(prefs);
-      alert('Notification preferences updated');
-    } catch (error) {
-      alert('Error updating preferences');
-    }
-  };
-
   // Get categories by type
   const getExpenseCategories = () => {
     return categories.filter(c => c.type === 'expense').map(c => c.name);
@@ -574,6 +691,176 @@ export default function ExpenseTracker() {
   const getIncomeCategories = () => {
     return categories.filter(c => c.type === 'income').map(c => c.name);
   };
+
+  // 2FA Handlers
+  const load2FAStatus = async () => {
+    try {
+      const response = await api.get('/2fa/status');
+      setTwoFactorStatus(response.data);
+    } catch (error) {
+      console.error('Error loading 2FA status:', error);
+    }
+  };
+
+  const handle2FASetup = async () => {
+    try {
+      setLoading(true);
+      const response = await api.post('/2fa/setup');
+      setTwoFASetupData(response.data);
+      setShow2FASetup(true);
+    } catch (error) {
+      alert(error.response?.data?.message || 'Error setting up 2FA');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handle2FAVerify = async (e) => {
+    e.preventDefault();
+    try {
+      setLoading(true);
+      const response = await api.post('/2fa/verify-setup', { token: twoFACode });
+      setBackupCodes(response.data.backupCodes);
+      setShowBackupCodes(true);
+      setShow2FASetup(false);
+      setTwoFASetupData(null);
+      setTwoFACode('');
+      setTwoFactorStatus({ enabled: true, backupCodesRemaining: response.data.backupCodes.length });
+      alert('2FA enabled successfully! Save your backup codes!');
+    } catch (error) {
+      alert(error.response?.data?.message || 'Invalid verification code');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handle2FADisable = async (password) => {
+    try {
+      setLoading(true);
+      await api.post('/2fa/disable', { password });
+      setTwoFactorStatus({ enabled: false, backupCodesRemaining: 0 });
+      alert('2FA disabled successfully');
+    } catch (error) {
+      alert(error.response?.data?.message || 'Error disabling 2FA');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleLogin2FA = async (e) => {
+    e.preventDefault();
+    try {
+      setLoading(true);
+      const response = await api.post('/auth/login/verify-2fa', {
+        userId: pending2FAUserId,
+        token: twoFACode,
+        isBackupCode: twoFACode.length === 8
+      });
+      localStorage.setItem('token', response.data.token);
+      setCurrentUser(response.data.user);
+      await loadUserData();
+      setRequires2FA(false);
+      setPending2FAUserId(null);
+      setTwoFACode('');
+    } catch (error) {
+      alert(error.response?.data?.message || 'Invalid verification code');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const loadCurrencies = async () => {
+    try {
+      const response = await api.get('/currency/list');
+      setCurrencies(response.data);
+    } catch (error) {
+      console.error('Error loading currencies:', error);
+    }
+  };
+
+  const loadExchangeRates = async () => {
+    try {
+      const response = await api.get('/currency/rates');
+      setExchangeRates(response.data);
+    } catch (error) {
+      console.error('Error loading exchange rates:', error);
+    }
+  };
+
+  const loadUserCurrency = async () => {
+    try {
+      const response = await api.get('/currency/preference');
+      setUserCurrency(response.data);
+    } catch (error) {
+      console.error('Error loading user currency:', error);
+    }
+  };
+
+  const handleCurrencyChange = async (currencyCode) => {
+    try {
+      setLoading(true);
+      const response = await api.put('/currency/preference', { currency: currencyCode });
+      setUserCurrency(response.data);
+      alert('Currency updated successfully');
+    } catch (error) {
+      alert(error.response?.data?.message || 'Error updating currency');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  // PWA Install Handler
+  const handleInstallClick = async () => {
+    if (!deferredPrompt) return;
+    
+    deferredPrompt.prompt();
+    const { outcome } = await deferredPrompt.userChoice;
+    
+    if (outcome === 'accepted') {
+      setIsInstalled(true);
+      setShowInstallPrompt(false);
+    }
+    setDeferredPrompt(null);
+  };
+
+  // Load settings when Settings tab is active
+  useEffect(() => {
+    if (currentUser) {
+      loadExchangeRates(); // Load rates on login
+      loadUserCurrency();
+      if (activeTab === 'settings') {
+        load2FAStatus();
+        loadCurrencies();
+      }
+    }
+  }, [activeTab, currentUser]);
+
+  // PWA Install prompt listener
+  useEffect(() => {
+    const handleBeforeInstallPrompt = (e) => {
+      e.preventDefault();
+      setDeferredPrompt(e);
+      setShowInstallPrompt(true);
+    };
+
+    const handleAppInstalled = () => {
+      setIsInstalled(true);
+      setShowInstallPrompt(false);
+    };
+
+    window.addEventListener('beforeinstallprompt', handleBeforeInstallPrompt);
+    window.addEventListener('appinstalled', handleAppInstalled);
+
+    // Check if already installed
+    if (window.matchMedia('(display-mode: standalone)').matches) {
+      setIsInstalled(true);
+    }
+
+    return () => {
+      window.removeEventListener('beforeinstallprompt', handleBeforeInstallPrompt);
+      window.removeEventListener('appinstalled', handleAppInstalled);
+    };
+  }, []);
 
   // Analytics calculations
   const totalIncome = expenses.filter(e => e.type === 'income').reduce((sum, e) => sum + e.amount, 0);
@@ -599,12 +886,11 @@ export default function ExpenseTracker() {
   const chartData = Object.values(monthlyData).sort((a, b) => a.month.localeCompare(b.month)).slice(-6);
 
   // Budget analysis
-  const currentMonth = new Date().toISOString().slice(0, 7);
-  const budgetAnalysis = budgets.filter(b => b.month === currentMonth).map(budget => {
+  const budgetAnalysis = budgets.filter(b => b.month === selectedBudgetMonth).map(budget => {
     const spent = expenses.filter(e => 
       e.category === budget.category && 
       e.type === 'expense' && 
-      e.date.startsWith(currentMonth)
+      e.date.startsWith(selectedBudgetMonth)
     ).reduce((sum, e) => sum + e.amount, 0);
     
     return {
@@ -615,7 +901,65 @@ export default function ExpenseTracker() {
     };
   });
 
+  if (authLoading) {
+    return (
+      <div className={`min-h-screen ${darkMode ? 'bg-gray-900' : 'bg-gray-50'} flex items-center justify-center`}>
+        <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-blue-600"></div>
+      </div>
+    );
+  }
+
   if (!currentUser) {
+    // 2FA Verification Screen
+    if (requires2FA) {
+      return (
+        <div className={`min-h-screen ${darkMode ? 'bg-gray-900' : 'bg-gradient-to-br from-blue-50 to-indigo-100'} flex items-center justify-center p-4`}>
+          <div className={`${darkMode ? 'bg-gray-800' : 'bg-white'} rounded-2xl shadow-2xl p-8 w-full max-w-md`}>
+            <div className="text-center mb-8">
+              <Shield className={`w-16 h-16 ${darkMode ? 'text-blue-400' : 'text-blue-600'} mx-auto mb-4`} />
+              <h1 className={`text-3xl font-bold ${darkMode ? 'text-white' : 'text-gray-800'}`}>Two-Factor Authentication</h1>
+              <p className={`${darkMode ? 'text-gray-400' : 'text-gray-600'} mt-2`}>Enter the code from your authenticator app</p>
+            </div>
+
+            <form onSubmit={handleLogin2FA} className="space-y-4">
+              <input
+                type="text"
+                placeholder="Enter 6-digit code or backup code"
+                maxLength={8}
+                className={`w-full px-4 py-3 border ${darkMode ? 'border-gray-600 bg-gray-700 text-white' : 'border-gray-300'} rounded-lg focus:ring-2 focus:ring-blue-500 text-center text-2xl tracking-widest`}
+                value={twoFACode}
+                onChange={(e) => setTwoFACode(e.target.value.replace(/[^A-Za-z0-9]/g, '').toUpperCase())}
+                required
+                autoFocus
+              />
+              <p className={`text-xs text-center ${darkMode ? 'text-gray-400' : 'text-gray-600'}`}>
+                Use a 6-digit code from your authenticator app, or an 8-character backup code
+              </p>
+              <button
+                type="submit"
+                disabled={loading || twoFACode.length < 6}
+                className="w-full bg-blue-600 text-white py-3 rounded-lg font-semibold hover:bg-blue-700 transition disabled:opacity-50"
+              >
+                {loading ? 'Verifying...' : 'Verify'}
+              </button>
+            </form>
+
+            <button
+              onClick={() => {
+                setRequires2FA(false);
+                setPending2FAUserId(null);
+                setTwoFACode('');
+              }}
+              className={`w-full mt-4 py-2 ${darkMode ? 'text-gray-400 hover:text-gray-200' : 'text-gray-600 hover:text-gray-800'} transition`}
+            >
+              ← Back to login
+            </button>
+          </div>
+        </div>
+      );
+    }
+
+    // Normal Login/Register Screen
     return (
       <div className={`min-h-screen ${darkMode ? 'bg-gray-900' : 'bg-gradient-to-br from-blue-50 to-indigo-100'} flex items-center justify-center p-4`}>
         <div className={`${darkMode ? 'bg-gray-800' : 'bg-white'} rounded-2xl shadow-2xl p-8 w-full max-w-md`}>
@@ -682,9 +1026,12 @@ export default function ExpenseTracker() {
         <div className="max-w-7xl mx-auto px-4 py-4 flex justify-between items-center">
           <div className="flex items-center gap-3">
             <Wallet className={`w-8 h-8 ${darkMode ? 'text-blue-400' : 'text-blue-600'}`} />
-            <h1 className={`text-2xl font-bold ${darkMode ? 'text-white' : 'text-gray-800'}`}>Expense Tracker</h1>
+            <h1 className={`text-xl md:text-2xl font-bold ${darkMode ? 'text-white' : 'text-gray-800'}`}>
+              <span className="hidden sm:inline">Expense Tracker</span>
+              <span className="sm:hidden">Expenses</span>
+            </h1>
           </div>
-          <div className="flex items-center gap-4">
+          <div className="flex items-center gap-2 md:gap-4">
             <button
               onClick={toggleDarkMode}
               className={`p-2 rounded-lg ${darkMode ? 'bg-gray-700 text-yellow-400' : 'bg-gray-100 text-gray-600'} hover:opacity-80 transition`}
@@ -693,7 +1040,7 @@ export default function ExpenseTracker() {
             </button>
             <span className={`${darkMode ? 'text-gray-300' : 'text-gray-700'} flex items-center gap-2`}>
               <User className="w-5 h-5" />
-              {currentUser.name}
+              <span className="hidden sm:inline">{currentUser.name}</span>
             </span>
             <button
               onClick={handleLogout}
@@ -707,22 +1054,22 @@ export default function ExpenseTracker() {
       </header>
 
       {/* Navigation */}
-      <nav className={`${darkMode ? 'bg-gray-800 border-gray-700' : 'bg-white'} shadow-sm border-b`}>
+      <nav className={`sticky top-0 z-50 backdrop-blur-xl border-b transition-all duration-300 hidden md:block ${darkMode ? 'bg-gray-900/80 border-gray-800' : 'bg-white/80 border-gray-200'}`}>
         <div className="max-w-7xl mx-auto px-4">
-          <div className="flex gap-2 overflow-x-auto">
-            {['dashboard', 'expenses', 'recurring', 'budgets', 'analytics', 'trends', 'categories'].map(tab => (
+          <div className="flex gap-2 overflow-x-auto py-2">
+            {['dashboard', 'calendar', 'assets', 'expenses', 'recurring', 'budgets', 'analytics', 'trends', 'categories', 'settings'].map(tab => (
               <button
                 key={tab}
                 onClick={() => {
                   setActiveTab(tab);
-                  if (tab === 'trends' && !trendData) {
+                  if (tab === 'trends') {
                     loadTrendData();
                   }
                 }}
-                className={`px-6 py-3 font-medium capitalize transition whitespace-nowrap ${
+                className={`px-5 py-2 rounded-full font-medium transition-all duration-300 capitalize text-sm whitespace-nowrap ${
                   activeTab === tab
-                    ? `${darkMode ? 'text-blue-400' : 'text-blue-600'} border-b-2 ${darkMode ? 'border-blue-400' : 'border-blue-600'}`
-                    : `${darkMode ? 'text-gray-400 hover:text-gray-200' : 'text-gray-600 hover:text-gray-800'}`
+                    ? 'bg-blue-600 text-white shadow-lg shadow-blue-500/30 transform scale-105'
+                    : (darkMode ? 'text-gray-400 hover:text-white hover:bg-gray-800' : 'text-gray-600 hover:text-blue-600 hover:bg-blue-50')
                 }`}
               >
                 {tab}
@@ -732,385 +1079,147 @@ export default function ExpenseTracker() {
         </div>
       </nav>
 
-      <main className="max-w-7xl mx-auto px-4 py-8">
+      <main className="max-w-7xl mx-auto px-4 py-8 pb-24 md:pb-8">
         {/* Dashboard */}
         {activeTab === 'dashboard' && (
+          <DashboardView
+            totalIncome={totalIncome}
+            totalExpense={totalExpense}
+            balance={balance}
+            chartData={chartData}
+            categoryData={categoryData}
+            trendData={trendData?.monthlyTrends}
+            expenses={expenses}
+            darkMode={darkMode}
+            formatAmount={formatAmount}
+            convertAmount={convertAmount}
+            userCurrency={userCurrency}
+            setShowAddExpense={setShowAddExpense}
+            setExpenseForm={setExpenseForm}
+          />
+        )}
+
+        {/* Calendar Tab */}
+        {activeTab === 'calendar' && (
           <div className="space-y-6">
-            {/* Stats Cards */}
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-              <div className={`${darkMode ? 'bg-gray-800 border-gray-700' : 'bg-white border-gray-200'} p-6 rounded-xl shadow-sm border`}>
-                <div className="flex items-center justify-between">
-                  <div>
-                    <p className={`${darkMode ? 'text-gray-400' : 'text-gray-600'} text-sm`}>Total Income</p>
-                    <p className="text-3xl font-bold text-green-600 mt-2">
-                      ${totalIncome.toFixed(2)}
-                    </p>
-                  </div>
-                  <TrendingUp className="w-12 h-12 text-green-600 opacity-20" />
-                </div>
-              </div>
-
-              <div className={`${darkMode ? 'bg-gray-800 border-gray-700' : 'bg-white border-gray-200'} p-6 rounded-xl shadow-sm border`}>
-                <div className="flex items-center justify-between">
-                  <div>
-                    <p className={`${darkMode ? 'text-gray-400' : 'text-gray-600'} text-sm`}>Total Expenses</p>
-                    <p className="text-3xl font-bold text-red-600 mt-2">
-                      ${totalExpense.toFixed(2)}
-                    </p>
-                  </div>
-                  <TrendingDown className="w-12 h-12 text-red-600 opacity-20" />
-                </div>
-              </div>
-
-              <div className={`${darkMode ? 'bg-gray-800 border-gray-700' : 'bg-white border-gray-200'} p-6 rounded-xl shadow-sm border`}>
-                <div className="flex items-center justify-between">
-                  <div>
-                    <p className={`${darkMode ? 'text-gray-400' : 'text-gray-600'} text-sm`}>Balance</p>
-                    <p className={`text-3xl font-bold mt-2 ${balance >= 0 ? 'text-blue-600' : 'text-red-600'}`}>
-                      ${balance.toFixed(2)}
-                    </p>
-                  </div>
-                  <DollarSign className="w-12 h-12 text-blue-600 opacity-20" />
-                </div>
+            <div className="flex justify-between items-center">
+              <h2 className={`text-2xl font-bold ${darkMode ? 'text-white' : ''}`}>Calendar</h2>
+              <div className="flex items-center gap-4">
+                 <input 
+                   type="month" 
+                   className={`px-4 py-2 border rounded-lg ${darkMode ? 'bg-gray-700 border-gray-600 text-white' : ''}`}
+                   value={currentDate.toISOString().slice(0, 7)}
+                   onChange={(e) => {
+                     const [y, m] = e.target.value.split('-');
+                     setCurrentDate(new Date(y, m - 1));
+                   }}
+                 />
               </div>
             </div>
 
-            {/* Charts */}
-            <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-              <div className={`${darkMode ? 'bg-gray-800 border-gray-700' : 'bg-white border-gray-200'} p-6 rounded-xl shadow-sm border`}>
-                <h3 className={`text-lg font-semibold mb-4 ${darkMode ? 'text-white' : ''}`}>Income vs Expenses</h3>
-                <ResponsiveContainer width="100%" height={300}>
-                  <BarChart data={chartData}>
-                    <CartesianGrid strokeDasharray="3 3" stroke={darkMode ? '#374151' : '#e5e7eb'} />
-                    <XAxis dataKey="month" stroke={darkMode ? '#9ca3af' : '#6b7280'} />
-                    <YAxis stroke={darkMode ? '#9ca3af' : '#6b7280'} />
-                    <Tooltip contentStyle={{ backgroundColor: darkMode ? '#1f2937' : '#fff', border: darkMode ? '1px solid #374151' : '1px solid #e5e7eb' }} />
-                    <Legend />
-                    <Bar dataKey="income" fill="#10b981" />
-                    <Bar dataKey="expense" fill="#ef4444" />
-                  </BarChart>
-                </ResponsiveContainer>
+            <div className={`${darkMode ? 'bg-gray-800 border-gray-700' : 'bg-white border-gray-200'} rounded-xl shadow-sm border p-6`}>
+              <div className="grid grid-cols-7 gap-2 mb-2 text-center font-semibold text-gray-500">
+                {['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'].map(d => <div key={d}>{d}</div>)}
               </div>
-
-              <div className={`${darkMode ? 'bg-gray-800 border-gray-700' : 'bg-white border-gray-200'} p-6 rounded-xl shadow-sm border`}>
-                <h3 className={`text-lg font-semibold mb-4 ${darkMode ? 'text-white' : ''}`}>Expenses by Category</h3>
-                {categoryData.length > 0 ? (
-                  <ResponsiveContainer width="100%" height={300}>
-                    <RechartsPie>
-                      <Pie
-                        data={categoryData}
-                        cx="50%"
-                        cy="50%"
-                        labelLine={false}
-                        label={(entry) => entry.name}
-                        outerRadius={100}
-                        fill="#8884d8"
-                        dataKey="value"
-                      >
-                        {categoryData.map((entry, index) => (
-                          <Cell key={`cell-${index}`} fill={COLORS[index % COLORS.length]} />
-                        ))}
-                      </Pie>
-                      <Tooltip contentStyle={{ backgroundColor: darkMode ? '#1f2937' : '#fff' }} />
-                    </RechartsPie>
-                  </ResponsiveContainer>
-                ) : (
-                  <div className={`h-[300px] flex items-center justify-center ${darkMode ? 'text-gray-500' : 'text-gray-500'}`}>
-                    No expense data available
-                  </div>
-                )}
+              <div className="grid grid-cols-7 gap-2">
+                {[...Array(new Date(currentDate.getFullYear(), currentDate.getMonth(), 1).getDay())].map((_, i) => <div key={`empty-${i}`} />)}
+                {[...Array(new Date(currentDate.getFullYear(), currentDate.getMonth() + 1, 0).getDate())].map((_, i) => {
+                   const day = i + 1;
+                   const dateStr = `${currentDate.getFullYear()}-${String(currentDate.getMonth() + 1).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+                   const dayExpenses = expenses.filter(e => e.date.startsWith(dateStr));
+                   const inc = dayExpenses.filter(e => e.type === 'income').reduce((s, e) => s + e.amount, 0);
+                   const exp = dayExpenses.filter(e => e.type === 'expense').reduce((s, e) => s + e.amount, 0);
+                   
+                   return (
+                     <div 
+                       key={day} 
+                       className={`min-h-[100px] border rounded-lg p-2 flex flex-col justify-between cursor-pointer hover:shadow-md transition ${darkMode ? 'border-gray-700 bg-gray-750' : 'border-gray-100 bg-gray-50'}`}
+                       onClick={() => {
+                         setFilters({...filters, startDate: dateStr, endDate: dateStr});
+                         setActiveTab('expenses');
+                       }}
+                     >
+                       <span className={`text-sm font-medium ${darkMode ? 'text-gray-400' : 'text-gray-600'}`}>{day}</span>
+                       <div className="text-xs space-y-1 text-right">
+                         {inc > 0 && <div className="text-green-500">+{Math.round(inc)}</div>}
+                         {exp > 0 && <div className="text-red-500">-{Math.round(exp)}</div>}
+                       </div>
+                     </div>
+                   );
+                })}
               </div>
             </div>
+          </div>
+        )}
 
-            {/* Recent Transactions */}
-            <div className={`${darkMode ? 'bg-gray-800 border-gray-700' : 'bg-white border-gray-200'} p-6 rounded-xl shadow-sm border`}>
-              <h3 className={`text-lg font-semibold mb-4 ${darkMode ? 'text-white' : ''}`}>Recent Transactions</h3>
-              {expenses.length > 0 ? (
-                <div className="space-y-3">
-                  {expenses.slice(-5).reverse().map(expense => (
-                    <div key={expense._id} className={`flex items-center justify-between p-3 ${darkMode ? 'bg-gray-700' : 'bg-gray-50'} rounded-lg`}>
-                      <div className="flex items-center gap-3">
-                        <div className={`w-10 h-10 rounded-full flex items-center justify-center ${
-                          expense.type === 'income' ? 'bg-green-100' : 'bg-red-100'
-                        }`}>
-                          {expense.type === 'income' ? (
-                            <TrendingUp className="w-5 h-5 text-green-600" />
-                          ) : (
-                            <TrendingDown className="w-5 h-5 text-red-600" />
-                          )}
-                        </div>
-                        <div>
-                          <p className={`font-medium ${darkMode ? 'text-white' : ''}`}>{expense.description}</p>
-                          <p className={`text-sm ${darkMode ? 'text-gray-400' : 'text-gray-600'}`}>{expense.category} • {expense.date.split('T')[0]}</p>
-                        </div>
+        {/* Assets Tab */}
+        {activeTab === 'assets' && (
+          <div className="space-y-6">
+            <h2 className={`text-2xl font-bold ${darkMode ? 'text-white' : ''}`}>Assets</h2>
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+               {['Cash', 'Credit Card', 'Debit Card', 'Bank Transfer', 'Digital Wallet'].map(method => {
+                  const income = expenses.filter(e => e.paymentMethod === method && e.type === 'income').reduce((sum, e) => sum + e.amount, 0);
+                  const expense = expenses.filter(e => e.paymentMethod === method && e.type === 'expense').reduce((sum, e) => sum + e.amount, 0);
+                  const balance = income - expense;
+                  
+                  return (
+                    <div key={method} className={`${darkMode ? 'bg-gray-800 border-gray-700' : 'bg-white border-gray-200'} p-6 rounded-xl shadow-sm border`}>
+                      <div className="flex justify-between mb-4">
+                        <h3 className={`font-semibold text-lg ${darkMode ? 'text-white' : 'text-gray-800'}`}>{method}</h3>
+                        <Wallet className={`w-6 h-6 ${darkMode ? 'text-blue-400' : 'text-blue-600'}`} />
                       </div>
-                      <p className={`font-semibold ${expense.type === 'income' ? 'text-green-600' : 'text-red-600'}`}>
-                        {expense.type === 'income' ? '+' : '-'}${expense.amount.toFixed(2)}
-                      </p>
+                      <div className="space-y-2">
+                         <div className="flex justify-between text-sm">
+                           <span className="text-green-500">Income</span>
+                           <span className={`font-mono ${darkMode ? 'text-gray-300' : ''}`}>{formatAmount(income)}</span>
+                         </div>
+                         <div className="flex justify-between text-sm">
+                           <span className="text-red-500">Expense</span>
+                           <span className={`font-mono ${darkMode ? 'text-gray-300' : ''}`}>{formatAmount(expense)}</span>
+                         </div>
+                         <div className={`pt-2 border-t mt-2 flex justify-between font-bold ${darkMode ? 'border-gray-700' : 'border-gray-200'}`}>
+                           <span className={darkMode ? 'text-gray-300' : 'text-gray-700'}>Balance</span>
+                           <span className={balance >= 0 ? 'text-blue-600' : 'text-red-600'}>{formatAmount(balance)}</span>
+                         </div>
+                      </div>
                     </div>
-                  ))}
-                </div>
-              ) : (
-                <p className={`${darkMode ? 'text-gray-500' : 'text-gray-500'} text-center py-8`}>No transactions yet. Add your first transaction!</p>
-              )}
+                  );
+               })}
             </div>
           </div>
         )}
 
         {/* Expenses Tab */}
         {activeTab === 'expenses' && (
-          <div className="space-y-6">
-            <div className="flex flex-col md:flex-row gap-4 justify-between items-start md:items-center">
-              <h2 className={`text-2xl font-bold ${darkMode ? 'text-white' : ''}`}>All Transactions</h2>
-              
-              {/* Search and Filter Bar */}
-              <div className="flex flex-wrap gap-3 w-full md:w-auto">
-                <div className="relative flex-1 md:flex-initial">
-                  <Search className={`absolute left-3 top-1/2 transform -translate-y-1/2 w-4 h-4 ${darkMode ? 'text-gray-500' : 'text-gray-400'}`} />
-                  <input
-                    type="text"
-                    placeholder="Search transactions..."
-                    className={`pl-10 pr-4 py-2 border ${darkMode ? 'border-gray-600 bg-gray-700 text-white' : 'border-gray-300'} rounded-lg focus:ring-2 focus:ring-blue-500 w-full md:w-64`}
-                    value={searchTerm}
-                    onChange={(e) => setSearchTerm(e.target.value)}
-                  />
-                </div>
-                
-                <button
-                  onClick={() => setShowFilters(!showFilters)}
-                  className={`flex items-center gap-2 px-4 py-2 ${darkMode ? 'bg-gray-700 text-white' : 'bg-gray-100 text-gray-700'} rounded-lg hover:opacity-80 transition`}
-                >
-                  <Filter className="w-4 h-4" />
-                  Filters
-                </button>
-
-                <button
-                  onClick={exportToCSV}
-                  disabled={expenses.length === 0}
-                  className="flex items-center gap-2 px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 transition disabled:opacity-50 disabled:cursor-not-allowed"
-                >
-                  <Download className="w-4 h-4" />
-                  CSV
-                </button>
-
-                <button
-                  onClick={handleExportPDF}
-                  disabled={expenses.length === 0}
-                  className="flex items-center gap-2 px-4 py-2 bg-red-600 text-white rounded-lg hover:bg-red-700 transition disabled:opacity-50 disabled:cursor-not-allowed"
-                >
-                  <FileText className="w-4 h-4" />
-                  PDF
-                </button>
-                
-                <button
-                  onClick={() => {
-                    setShowAddExpense(true);
-                    setEditingExpense(null);
-                    resetExpenseForm();
-                  }}
-                  className="flex items-center gap-2 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition"
-                >
-                  <PlusCircle className="w-4 h-4" />
-                  Add
-                </button>
-              </div>
-            </div>
-
-            {/* Advanced Filters Panel */}
-            {showFilters && (
-              <div className={`${darkMode ? 'bg-gray-800 border-gray-700' : 'bg-white border-gray-200'} p-6 rounded-xl shadow-sm border`}>
-                <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-                  <div>
-                    <label className={`block text-sm font-medium ${darkMode ? 'text-gray-300' : 'text-gray-700'} mb-2`}>Category</label>
-                    <select
-                      className={`w-full px-4 py-2 border ${darkMode ? 'border-gray-600 bg-gray-700 text-white' : 'border-gray-300'} rounded-lg`}
-                      value={filters.category}
-                      onChange={(e) => setFilters({ ...filters, category: e.target.value })}
-                    >
-                      <option value="">All Categories</option>
-                      {categories.map(cat => (
-                        <option key={cat._id} value={cat.name}>{cat.name}</option>
-                      ))}
-                    </select>
-                  </div>
-
-                  <div>
-                    <label className={`block text-sm font-medium ${darkMode ? 'text-gray-300' : 'text-gray-700'} mb-2`}>Type</label>
-                    <select
-                      className={`w-full px-4 py-2 border ${darkMode ? 'border-gray-600 bg-gray-700 text-white' : 'border-gray-300'} rounded-lg`}
-                      value={filters.type}
-                      onChange={(e) => setFilters({ ...filters, type: e.target.value })}
-                    >
-                      <option value="">All Types</option>
-                      <option value="income">Income</option>
-                      <option value="expense">Expense</option>
-                    </select>
-                  </div>
-
-                  <div>
-                    <label className={`block text-sm font-medium ${darkMode ? 'text-gray-300' : 'text-gray-700'} mb-2`}>Payment Method</label>
-                    <select
-                      className={`w-full px-4 py-2 border ${darkMode ? 'border-gray-600 bg-gray-700 text-white' : 'border-gray-300'} rounded-lg`}
-                      value={filters.paymentMethod}
-                      onChange={(e) => setFilters({ ...filters, paymentMethod: e.target.value })}
-                    >
-                      <option value="">All Methods</option>
-                      <option value="Cash">Cash</option>
-                      <option value="Credit Card">Credit Card</option>
-                      <option value="Debit Card">Debit Card</option>
-                      <option value="Bank Transfer">Bank Transfer</option>
-                      <option value="Digital Wallet">Digital Wallet</option>
-                    </select>
-                  </div>
-
-                  <div>
-                    <label className={`block text-sm font-medium ${darkMode ? 'text-gray-300' : 'text-gray-700'} mb-2`}>Start Date</label>
-                    <input
-                      type="date"
-                      className={`w-full px-4 py-2 border ${darkMode ? 'border-gray-600 bg-gray-700 text-white' : 'border-gray-300'} rounded-lg`}
-                      value={filters.startDate}
-                      onChange={(e) => setFilters({ ...filters, startDate: e.target.value })}
-                    />
-                  </div>
-
-                  <div>
-                    <label className={`block text-sm font-medium ${darkMode ? 'text-gray-300' : 'text-gray-700'} mb-2`}>End Date</label>
-                    <input
-                      type="date"
-                      className={`w-full px-4 py-2 border ${darkMode ? 'border-gray-600 bg-gray-700 text-white' : 'border-gray-300'} rounded-lg`}
-                      value={filters.endDate}
-                      onChange={(e) => setFilters({ ...filters, endDate: e.target.value })}
-                    />
-                  </div>
-
-                  <div>
-                    <label className={`block text-sm font-medium ${darkMode ? 'text-gray-300' : 'text-gray-700'} mb-2`}>Amount Range</label>
-                    <div className="flex gap-2">
-                      <input
-                        type="number"
-                        placeholder="Min"
-                        className={`w-1/2 px-4 py-2 border ${darkMode ? 'border-gray-600 bg-gray-700 text-white' : 'border-gray-300'} rounded-lg`}
-                        value={filters.minAmount}
-                        onChange={(e) => setFilters({ ...filters, minAmount: e.target.value })}
-                      />
-                      <input
-                        type="number"
-                        placeholder="Max"
-                        className={`w-1/2 px-4 py-2 border ${darkMode ? 'border-gray-600 bg-gray-700 text-white' : 'border-gray-300'} rounded-lg`}
-                        value={filters.maxAmount}
-                        onChange={(e) => setFilters({ ...filters, maxAmount: e.target.value })}
-                      />
-                    </div>
-                  </div>
-                </div>
-
-                <div className="flex gap-3 mt-4">
-                  <button
-                    onClick={clearFilters}
-                    className={`px-4 py-2 ${darkMode ? 'bg-gray-700 text-white' : 'bg-gray-100 text-gray-700'} rounded-lg hover:opacity-80 transition`}
-                  >
-                    Clear Filters
-                  </button>
-                  <div className={`flex-1 text-sm ${darkMode ? 'text-gray-400' : 'text-gray-600'} flex items-center`}>
-                    Showing {filteredExpenses.length} of {expenses.length} transactions
-                  </div>
-                </div>
-              </div>
-            )}
-
-            {/* Transactions Table */}
-            <div className={`${darkMode ? 'bg-gray-800 border-gray-700' : 'bg-white border-gray-200'} rounded-xl shadow-sm border overflow-x-auto`}>
-              {currentExpenses.length > 0 ? (
-                <>
-                  <table className="w-full">
-                    <thead className={`${darkMode ? 'bg-gray-700' : 'bg-gray-50'} border-b ${darkMode ? 'border-gray-600' : ''}`}>
-                      <tr>
-                        <th className={`px-6 py-3 text-left text-sm font-semibold ${darkMode ? 'text-gray-300' : 'text-gray-700'}`}>Date</th>
-                        <th className={`px-6 py-3 text-left text-sm font-semibold ${darkMode ? 'text-gray-300' : 'text-gray-700'}`}>Description</th>
-                        <th className={`px-6 py-3 text-left text-sm font-semibold ${darkMode ? 'text-gray-300' : 'text-gray-700'}`}>Category</th>
-                        <th className={`px-6 py-3 text-left text-sm font-semibold ${darkMode ? 'text-gray-300' : 'text-gray-700'}`}>Payment</th>
-                        <th className={`px-6 py-3 text-left text-sm font-semibold ${darkMode ? 'text-gray-300' : 'text-gray-700'}`}>Amount</th>
-                        <th className={`px-6 py-3 text-left text-sm font-semibold ${darkMode ? 'text-gray-300' : 'text-gray-700'}`}>Actions</th>
-                      </tr>
-                    </thead>
-                    <tbody className="divide-y">
-                      {currentExpenses.map(expense => (
-                        <tr key={expense._id} className={`${darkMode ? 'hover:bg-gray-700' : 'hover:bg-gray-50'}`}>
-                          <td className={`px-6 py-4 text-sm ${darkMode ? 'text-gray-300' : ''}`}>{expense.date.split('T')[0]}</td>
-                          <td className={`px-6 py-4 text-sm font-medium ${darkMode ? 'text-white' : ''}`}>{expense.description}</td>
-                          <td className={`px-6 py-4 text-sm ${darkMode ? 'text-gray-300' : ''}`}>{expense.category}</td>
-                          <td className={`px-6 py-4 text-sm ${darkMode ? 'text-gray-300' : ''}`}>{expense.paymentMethod}</td>
-                          <td className="px-6 py-4 text-sm">
-                            <span className={`font-semibold ${expense.type === 'income' ? 'text-green-600' : 'text-red-600'}`}>
-                              {expense.type === 'income' ? '+' : '-'}${expense.amount.toFixed(2)}
-                            </span>
-                          </td>
-                          <td className="px-6 py-4 text-sm">
-                            <div className="flex gap-2">
-                              <button
-                                onClick={() => handleEditExpense(expense)}
-                                className="p-1 text-blue-600 hover:bg-blue-50 rounded"
-                              >
-                                <Edit2 className="w-4 h-4" />
-                              </button>
-                              <button
-                                onClick={() => handleDeleteExpense(expense._id)}
-                                className="p-1 text-red-600 hover:bg-red-50 rounded"
-                              >
-                                <Trash2 className="w-4 h-4" />
-                              </button>
-                            </div>
-                          </td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-
-                  {/* Pagination */}
-                  {totalPages > 1 && (
-                    <div className={`px-6 py-4 border-t ${darkMode ? 'border-gray-700' : ''} flex items-center justify-between`}>
-                      <div className={`text-sm ${darkMode ? 'text-gray-400' : 'text-gray-600'}`}>
-                        Showing {indexOfFirstItem + 1} to {Math.min(indexOfLastItem, filteredExpenses.length)} of {filteredExpenses.length} entries
-                      </div>
-                      <div className="flex gap-2">
-                        <button
-                          onClick={() => setCurrentPage(prev => Math.max(prev - 1, 1))}
-                          disabled={currentPage === 1}
-                          className={`px-3 py-1 rounded ${darkMode ? 'bg-gray-700 text-white' : 'bg-gray-100 text-gray-700'} disabled:opacity-50 disabled:cursor-not-allowed hover:opacity-80`}
-                        >
-                          <ChevronLeft className="w-4 h-4" />
-                        </button>
-                        {[...Array(totalPages)].map((_, i) => (
-                          <button
-                            key={i + 1}
-                            onClick={() => setCurrentPage(i + 1)}
-                            className={`px-3 py-1 rounded ${
-                              currentPage === i + 1
-                                ? 'bg-blue-600 text-white'
-                                : darkMode ? 'bg-gray-700 text-white hover:opacity-80' : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
-                            }`}
-                          >
-                            {i + 1}
-                          </button>
-                        ))}
-                        <button
-                          onClick={() => setCurrentPage(prev => Math.min(prev + 1, totalPages))}
-                          disabled={currentPage === totalPages}
-                          className={`px-3 py-1 rounded ${darkMode ? 'bg-gray-700 text-white' : 'bg-gray-100 text-gray-700'} disabled:opacity-50 disabled:cursor-not-allowed hover:opacity-80`}
-                        >
-                          <ChevronRight className="w-4 h-4" />
-                        </button>
-                      </div>
-                    </div>
-                  )}
-                </>
-              ) : (
-                <div className={`p-8 text-center ${darkMode ? 'text-gray-500' : 'text-gray-500'}`}>
-                  <p>No transactions found. {searchTerm || Object.values(filters).some(v => v) ? 'Try adjusting your filters.' : 'Click "Add" to get started!'}</p>
-                </div>
-              )}
-            </div>
-          </div>
+          <ExpensesView
+            expenses={expenses}
+            filteredExpenses={filteredExpenses}
+            currentExpenses={currentExpenses}
+            searchTerm={searchTerm}
+            setSearchTerm={setSearchTerm}
+            showFilters={showFilters}
+            setShowFilters={setShowFilters}
+            filters={filters}
+            setFilters={setFilters}
+            clearFilters={clearFilters}
+            exportToCSV={exportToCSV}
+            handleExportPDF={handleExportPDF}
+            setShowAddExpense={setShowAddExpense}
+            setEditingExpense={setEditingExpense}
+            resetExpenseForm={resetExpenseForm}
+            expenseViewMode={expenseViewMode}
+            setExpenseViewMode={setExpenseViewMode}
+            categories={categories}
+            formatAmount={formatAmount}
+            handleEditExpense={handleEditExpense}
+            handleDeleteExpense={handleDeleteExpense}
+            currentPage={currentPage}
+            setCurrentPage={setCurrentPage}
+            totalPages={totalPages}
+            indexOfFirstItem={indexOfFirstItem}
+            indexOfLastItem={indexOfLastItem}
+            darkMode={darkMode}
+          />
         )}
 
         {/* Recurring Expenses Tab */}
@@ -1150,7 +1259,7 @@ export default function ExpenseTracker() {
                     <div className="flex justify-between text-sm">
                       <span className={darkMode ? 'text-gray-400' : 'text-gray-600'}>Amount</span>
                       <span className={`font-semibold ${recurring.type === 'income' ? 'text-green-600' : 'text-red-600'}`}>
-                        ${recurring.amount.toFixed(2)}
+                        {formatAmount(recurring.amount)}
                       </span>
                     </div>
                     <div className="flex justify-between text-sm">
@@ -1200,48 +1309,84 @@ export default function ExpenseTracker() {
 
         {activeTab === 'budgets' && (
           <div className="space-y-6">
-            <div className="flex justify-between items-center">
-              <h2 className={`text-2xl font-bold ${darkMode ? 'text-white' : ''}`}>Budget Management</h2>
-              <button
-                onClick={() => setShowAddBudget(true)}
-                className="flex items-center gap-2 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition"
-              >
-                <PlusCircle className="w-4 h-4" />
-                Set Budget
-              </button>
+            <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
+              <h2 className={`text-xl md:text-2xl font-bold ${darkMode ? 'text-white' : ''}`}>Budget Management</h2>
+              <div className="flex gap-4 items-center w-full md:w-auto">
+                <input
+                  type="month"
+                  className={`px-4 py-2 border ${darkMode ? 'border-gray-600 bg-gray-700 text-white' : 'border-gray-300'} rounded-lg focus:ring-2 focus:ring-blue-500`}
+                  value={selectedBudgetMonth}
+                  onChange={(e) => setSelectedBudgetMonth(e.target.value)}
+                />
+                <button
+                  onClick={() => {
+                    setShowAddBudget(true);
+                    resetBudgetForm();
+                    setBudgetForm(prev => ({ ...prev, month: selectedBudgetMonth }));
+                  }}
+                  className="flex items-center gap-2 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition"
+                >
+                  <PlusCircle className="w-4 h-4" />
+                  Set Budget
+                </button>
+              </div>
             </div>
 
             {budgetAnalysis.length > 0 ? (
               <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                {budgetAnalysis.map(budget => (
-                  <div key={budget.category} className={`${darkMode ? 'bg-gray-800 border-gray-700' : 'bg-white border-gray-200'} p-6 rounded-xl shadow-sm border`}>
-                    <h3 className={`font-semibold text-lg mb-4 ${darkMode ? 'text-white' : ''}`}>{budget.category}</h3>
-                    <div className="space-y-3">
-                      <div className="flex justify-between text-sm">
-                        <span className={darkMode ? 'text-gray-400' : 'text-gray-600'}>Spent</span>
-                        <span className={`font-semibold ${darkMode ? 'text-white' : ''}`}>${budget.spent.toFixed(2)}</span>
+                {budgetAnalysis.map(budget => {
+                  const remaining = budget.limit - budget.spent;
+                  return (
+                    <div key={budget._id || budget.category} className={`${darkMode ? 'bg-gray-800 border-gray-700' : 'bg-white border-gray-200'} p-4 md:p-6 rounded-xl shadow-sm border`}>
+                      <div className="flex justify-between items-start mb-4">
+                        <h3 className={`font-semibold text-lg ${darkMode ? 'text-white' : ''}`}>{budget.category}</h3>
+                        <div className="flex gap-2">
+                          <button
+                            onClick={() => handleEditBudget(budget)}
+                            className="p-1.5 text-blue-600 hover:bg-blue-50 rounded transition"
+                          >
+                            <Edit2 className="w-4 h-4" />
+                          </button>
+                          <button
+                            onClick={() => handleDeleteBudget(budget._id)}
+                            className="p-1.5 text-red-600 hover:bg-red-50 rounded transition"
+                          >
+                            <Trash2 className="w-4 h-4" />
+                          </button>
+                        </div>
                       </div>
-                      <div className="flex justify-between text-sm">
-                        <span className={darkMode ? 'text-gray-400' : 'text-gray-600'}>Budget</span>
-                        <span className={`font-semibold ${darkMode ? 'text-white' : ''}`}>${budget.limit.toFixed(2)}</span>
+                      
+                      <div className="space-y-3">
+                        <div className="flex justify-between text-sm">
+                          <span className={darkMode ? 'text-gray-400' : 'text-gray-600'}>Spent</span>
+                          <span className={`font-semibold ${darkMode ? 'text-white' : ''}`}>{formatAmount(budget.spent)}</span>
+                        </div>
+                        <div className="flex justify-between text-sm">
+                          <span className={darkMode ? 'text-gray-400' : 'text-gray-600'}>Budget</span>
+                          <span className={`font-semibold ${darkMode ? 'text-white' : ''}`}>{formatAmount(budget.limit)}</span>
+                        </div>
+                        <div className="flex justify-between text-sm">
+                          <span className={darkMode ? 'text-gray-400' : 'text-gray-600'}>Remaining</span>
+                          <span className={`font-semibold ${remaining < 0 ? 'text-red-500' : 'text-green-500'}`}>{formatAmount(remaining)}</span>
+                        </div>
+                        <div className={`w-full ${darkMode ? 'bg-gray-700' : 'bg-gray-200'} rounded-full h-3`}>
+                          <div
+                            className={`h-3 rounded-full transition-all ${
+                              budget.percentage > 100 ? 'bg-red-600' : budget.percentage > 80 ? 'bg-yellow-600' : 'bg-green-600'
+                            }`}
+                            style={{ width: `${Math.min(budget.percentage, 100)}%` }}
+                          />
+                        </div>
+                        <p className={`text-sm font-medium ${
+                          budget.percentage > 100 ? 'text-red-600' : budget.percentage > 80 ? 'text-yellow-600' : 'text-green-600'
+                        }`}>
+                          {budget.percentage.toFixed(1)}% used
+                          {budget.percentage > 100 && ' - Over budget!'}
+                        </p>
                       </div>
-                      <div className={`w-full ${darkMode ? 'bg-gray-700' : 'bg-gray-200'} rounded-full h-3`}>
-                        <div
-                          className={`h-3 rounded-full transition-all ${
-                            budget.percentage > 100 ? 'bg-red-600' : budget.percentage > 80 ? 'bg-yellow-600' : 'bg-green-600'
-                          }`}
-                          style={{ width: `${Math.min(budget.percentage, 100)}%` }}
-                        />
-                      </div>
-                      <p className={`text-sm font-medium ${
-                        budget.percentage > 100 ? 'text-red-600' : budget.percentage > 80 ? 'text-yellow-600' : 'text-green-600'
-                      }`}>
-                        {budget.percentage.toFixed(1)}% used
-                        {budget.percentage > 100 && ' - Over budget!'}
-                      </p>
                     </div>
-                  </div>
-                ))}
+                  );
+                })}
               </div>
             ) : (
               <div className={`${darkMode ? 'bg-gray-800 border-gray-700 text-gray-500' : 'bg-white border-gray-200 text-gray-500'} p-8 rounded-xl shadow-sm border text-center`}>
@@ -1262,8 +1407,11 @@ export default function ExpenseTracker() {
                   <LineChart data={chartData}>
                     <CartesianGrid strokeDasharray="3 3" stroke={darkMode ? '#374151' : '#e5e7eb'} />
                     <XAxis dataKey="month" stroke={darkMode ? '#9ca3af' : '#6b7280'} />
-                    <YAxis stroke={darkMode ? '#9ca3af' : '#6b7280'} />
-                    <Tooltip contentStyle={{ backgroundColor: darkMode ? '#1f2937' : '#fff', border: darkMode ? '1px solid #374151' : '1px solid #e5e7eb' }} />
+                    <YAxis stroke={darkMode ? '#9ca3af' : '#6b7280'} tickFormatter={val => `${val}`} />
+                    <Tooltip 
+                      contentStyle={{ backgroundColor: darkMode ? '#1f2937' : '#fff', border: darkMode ? '1px solid #374151' : '1px solid #e5e7eb' }} 
+                      formatter={(value) => [convertAmount(value), 'Amount']}
+                    />
                     <Legend />
                     <Line type="monotone" dataKey="income" stroke="#10b981" strokeWidth={2} />
                     <Line type="monotone" dataKey="expense" stroke="#ef4444" strokeWidth={2} />
@@ -1440,7 +1588,7 @@ export default function ExpenseTracker() {
                   setEditingCategory(null);
                   setCategoryForm({ name: '', type: 'expense', icon: '📁', color: '#3b82f6' });
                 }}
-                className="flex items-center gap-2 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition"
+                className="flex items-center gap-2 px-5 py-2.5 bg-gradient-to-r from-blue-600 to-blue-700 text-white rounded-xl shadow-lg shadow-blue-500/20 hover:shadow-blue-500/40 hover:-translate-y-0.5 transition-all duration-300"
               >
                 <Plus className="w-4 h-4" />
                 Add Category
@@ -1532,12 +1680,41 @@ export default function ExpenseTracker() {
             </div>
           </div>
         )}
+
+        {activeTab === 'settings' && (
+          <SettingsView
+            darkMode={darkMode}
+            toggleDarkMode={toggleDarkMode}
+            userCurrency={userCurrency}
+            handleCurrencyChange={handleCurrencyChange}
+            currencies={currencies}
+            twoFactorStatus={twoFactorStatus}
+            show2FASetup={show2FASetup}
+            setShow2FASetup={setShow2FASetup}
+            twoFASetupData={twoFASetupData}
+            setTwoFASetupData={setTwoFASetupData}
+            twoFACode={twoFACode}
+            setTwoFACode={setTwoFACode}
+            handle2FASetup={handle2FASetup}
+            handle2FAVerify={handle2FAVerify}
+            handle2FADisable={handle2FADisable}
+            backupCodes={backupCodes}
+            showBackupCodes={showBackupCodes}
+            setShowBackupCodes={setShowBackupCodes} // Verify this prop exists?
+            isInstalled={isInstalled}
+            showInstallPrompt={showInstallPrompt}
+            handleInstallClick={handleInstallClick}
+            currentUser={currentUser}
+            expenses={expenses}
+            loading={loading}
+          />
+        )}
       </main>
 
       {/* Add/Edit Expense Modal */}
       {showAddExpense && (
-        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4 z-50">
-          <div className={`${darkMode ? 'bg-gray-800' : 'bg-white'} rounded-xl shadow-2xl p-6 w-full max-w-md max-h-[90vh] overflow-y-auto`}>
+        <div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center p-4 z-[60] animate-fade-in">
+          <div className={`${darkMode ? 'bg-gray-800' : 'bg-white'} rounded-2xl shadow-2xl p-6 w-full max-w-md max-h-[90vh] overflow-y-auto animate-modal`}>
             <div className="flex justify-between items-center mb-6">
               <h3 className={`text-xl font-bold ${darkMode ? 'text-white' : ''}`}>{editingExpense ? 'Edit' : 'Add'} Transaction</h3>
               <button
@@ -1601,9 +1778,13 @@ export default function ExpenseTracker() {
                   value={expenseForm.category}
                   onChange={(e) => setExpenseForm({ ...expenseForm, category: e.target.value })}
                 >
-                  {(expenseForm.type === 'expense' ? getExpenseCategories() : getIncomeCategories()).map(cat => (
-                    <option key={cat} value={cat}>{cat}</option>
-                  ))}
+                  {getExpenseCategories().length > 0 || getIncomeCategories().length > 0 ? (
+                    (expenseForm.type === 'expense' ? getExpenseCategories() : getIncomeCategories()).map(cat => (
+                      <option key={cat} value={cat}>{cat}</option>
+                    ))
+                  ) : (
+                    <option disabled value="">Loading categories...</option>
+                  )}
                 </select>
               </div>
 
@@ -1633,7 +1814,7 @@ export default function ExpenseTracker() {
               <div>
                 <label className={`block text-sm font-medium ${darkMode ? 'text-gray-300' : 'text-gray-700'} mb-2`}>Payment Method</label>
                 <select
-                  className={`w-full px-4 py-2 border ${darkMode ? 'border-gray-600 bg-gray-700 text-white' : 'border-gray-300'} rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent`}
+                  className={`input-field ${darkMode ? 'text-white' : ''}`}
                   value={expenseForm.paymentMethod}
                   onChange={(e) => setExpenseForm({ ...expenseForm, paymentMethod: e.target.value })}
                 >
@@ -1648,7 +1829,7 @@ export default function ExpenseTracker() {
               <button
                 type="submit"
                 disabled={loading}
-                className="w-full bg-blue-600 text-white py-3 rounded-lg font-semibold hover:bg-blue-700 transition flex items-center justify-center gap-2 disabled:opacity-50"
+                className="w-full btn-gradient py-3 rounded-xl font-semibold flex items-center justify-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
               >
                 <Save className="w-4 h-4" />
                 {loading ? 'Saving...' : (editingExpense ? 'Update' : 'Add')} Transaction
@@ -1660,8 +1841,8 @@ export default function ExpenseTracker() {
 
       {/* Add/Edit Recurring Expense Modal */}
       {showAddRecurring && (
-        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4 z-50">
-          <div className={`${darkMode ? 'bg-gray-800' : 'bg-white'} rounded-xl shadow-2xl p-6 w-full max-w-md max-h-[90vh] overflow-y-auto`}>
+        <div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center p-4 z-[60] animate-fade-in">
+          <div className={`${darkMode ? 'bg-gray-800' : 'bg-white'} rounded-2xl shadow-2xl p-6 w-full max-w-md max-h-[90vh] overflow-y-auto animate-modal`}>
             <div className="flex justify-between items-center mb-6">
               <h3 className={`text-xl font-bold ${darkMode ? 'text-white' : ''}`}>{editingRecurring ? 'Edit' : 'Add'} Recurring Expense</h3>
               <button
@@ -1725,9 +1906,13 @@ export default function ExpenseTracker() {
                   value={recurringForm.category}
                   onChange={(e) => setRecurringForm({ ...recurringForm, category: e.target.value })}
                 >
-                  {(recurringForm.type === 'expense' ? getExpenseCategories() : getIncomeCategories()).map(cat => (
-                    <option key={cat} value={cat}>{cat}</option>
-                  ))}
+                  {getExpenseCategories().length > 0 || getIncomeCategories().length > 0 ? (
+                    (recurringForm.type === 'expense' ? getExpenseCategories() : getIncomeCategories()).map(cat => (
+                      <option key={cat} value={cat}>{cat}</option>
+                    ))
+                  ) : (
+                    <option disabled value="">Loading categories...</option>
+                  )}
                 </select>
               </div>
 
@@ -1811,12 +1996,15 @@ export default function ExpenseTracker() {
 
       {/* Add Budget Modal */}
       {showAddBudget && (
-        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4 z-50">
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4 z-[60]">
           <div className={`${darkMode ? 'bg-gray-800' : 'bg-white'} rounded-xl shadow-2xl p-6 w-full max-w-md`}>
             <div className="flex justify-between items-center mb-6">
-              <h3 className={`text-xl font-bold ${darkMode ? 'text-white' : ''}`}>Set Budget</h3>
+              <h3 className={`text-xl font-bold ${darkMode ? 'text-white' : ''}`}>{editingBudget ? 'Edit' : 'Set'} Budget</h3>
               <button
-                onClick={() => setShowAddBudget(false)}
+                onClick={() => {
+                  setShowAddBudget(false);
+                  setEditingBudget(null);
+                }}
                 className={darkMode ? 'text-gray-400 hover:text-gray-200' : 'text-gray-500 hover:text-gray-700'}
               >
                 <X className="w-6 h-6" />
@@ -1831,9 +2019,13 @@ export default function ExpenseTracker() {
                   value={budgetForm.category}
                   onChange={(e) => setBudgetForm({ ...budgetForm, category: e.target.value })}
                 >
-                  {getExpenseCategories().map(cat => (
-                    <option key={cat} value={cat}>{cat}</option>
-                  ))}
+                  {getExpenseCategories().length > 0 ? (
+                    getExpenseCategories().map(cat => (
+                      <option key={cat} value={cat}>{cat}</option>
+                    ))
+                  ) : (
+                    <option disabled value="">No categories available</option>
+                  )}
                 </select>
               </div>
 
@@ -1868,7 +2060,7 @@ export default function ExpenseTracker() {
                 className="w-full bg-blue-600 text-white py-3 rounded-lg font-semibold hover:bg-blue-700 transition flex items-center justify-center gap-2 disabled:opacity-50"
               >
                 <Save className="w-4 h-4" />
-                {loading ? 'Saving...' : 'Set Budget'}
+                  {loading ? 'Saving...' : (editingBudget ? 'Update Budget' : 'Set Budget')}
               </button>
             </form>
           </div>
@@ -1968,6 +2160,15 @@ export default function ExpenseTracker() {
           </div>
         </div>
       )}
+      {/* Mobile Bottom Navigation */}
+      <div className="md:hidden">
+        <MobileBottomNav
+          activeTab={activeTab}
+          setActiveTab={setActiveTab}
+          darkMode={darkMode}
+          setShowAddExpense={setShowAddExpense}
+        />
+      </div>
     </div>
   );
 }
