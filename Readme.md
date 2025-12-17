@@ -56,8 +56,8 @@
 ### 1. Clone the Repository
 
 ```bash
-git clone https://github.com/yourusername/money-manager.git
-cd money-manager
+git clone https://github.com/svithjeshayan/expense-tracker-mern.git
+cd expense-tracker-mern
 ```
 
 ### 2. Backend Setup
@@ -67,7 +67,7 @@ cd backend
 npm install
 ```
 
-Create a `.env` file in the `backend` directory (see `.env.example`):
+Create a `.env` file in the `backend` directory (copy from `.env.example`):
 
 ```env
 PORT=5000
@@ -139,6 +139,20 @@ MERN/
 │
 └── README.md           # Documentation
 ```
+
+---
+
+## Deployment
+
+- **Frontend:** Deploy on Vercel or Netlify
+- **Backend:** Deploy on Render, Heroku, or Cyclic
+- **Database:** Use MongoDB Atlas for production
+
+---
+
+## Contributing
+
+Feel free to fork, open issues, or submit pull requests!
 
 ---
 
