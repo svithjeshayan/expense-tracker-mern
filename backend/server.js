@@ -19,6 +19,7 @@ app.use(express.json());
 app.use('/api/auth', require('./routes/auth'));
 app.use('/api/expenses', require('./routes/expenses'));
 app.use('/api/budgets', require('./routes/budgets'));
+app.use('/api/recurring', require('./routes/recurring'));
 
 // Health check
 app.get('/', (req, res) => {
@@ -30,3 +31,6 @@ const PORT = process.env.PORT || 5000;
 app.listen(PORT, () => {
   console.log(`🚀 Server running on port ${PORT}`);
 });
+
+const { startRecurringProcessor } = require('./jobs/processRecurring');
+startRecurringProcessor();

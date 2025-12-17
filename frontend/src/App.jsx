@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { PlusCircle, TrendingUp, TrendingDown, Wallet, Calendar, Download, Edit2, Trash2, Save, X, DollarSign, LogOut, User } from 'lucide-react';
+import { PlusCircle, TrendingUp, TrendingDown, Wallet, Download, Edit2, Trash2, Save, X, DollarSign, LogOut, User, Moon, Sun, Search, Filter, ChevronLeft, ChevronRight, RefreshCw, Calendar } from 'lucide-react';
 import { LineChart, Line, BarChart, Bar, PieChart as RechartsPie, Pie, Cell, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer } from 'recharts';
 import api from './api/axios';
 
@@ -22,13 +22,34 @@ export default function ExpenseTracker() {
   const [isLogin, setIsLogin] = useState(true);
   const [authForm, setAuthForm] = useState({ name: '', email: '', password: '' });
   const [loading, setLoading] = useState(false);
+  const [darkMode, setDarkMode] = useState(false);
   
   const [activeTab, setActiveTab] = useState('dashboard');
   const [expenses, setExpenses] = useState([]);
   const [budgets, setBudgets] = useState([]);
+  const [recurringExpenses, setRecurringExpenses] = useState([]);
   const [showAddExpense, setShowAddExpense] = useState(false);
   const [showAddBudget, setShowAddBudget] = useState(false);
+  const [showAddRecurring, setShowAddRecurring] = useState(false);
+  const [showFilters, setShowFilters] = useState(false);
   const [editingExpense, setEditingExpense] = useState(null);
+  const [editingRecurring, setEditingRecurring] = useState(null);
+  
+  // Pagination
+  const [currentPage, setCurrentPage] = useState(1);
+  const [itemsPerPage] = useState(10);
+  
+  // Search & Filter
+  const [searchTerm, setSearchTerm] = useState('');
+  const [filters, setFilters] = useState({
+    category: '',
+    type: '',
+    paymentMethod: '',
+    startDate: '',
+    endDate: '',
+    minAmount: '',
+    maxAmount: ''
+  });
   
   const [expenseForm, setExpenseForm] = useState({
     amount: '',
@@ -39,6 +60,17 @@ export default function ExpenseTracker() {
     type: 'expense'
   });
 
+  const [recurringForm, setRecurringForm] = useState({
+    amount: '',
+    category: 'Food & Dining',
+    description: '',
+    paymentMethod: 'Cash',
+    type: 'expense',
+    frequency: 'monthly',
+    startDate: new Date().toISOString().split('T')[0],
+    dayOfMonth: '1'
+  });
+
   const [budgetForm, setBudgetForm] = useState({
     category: 'Food & Dining',
     limit: '',
@@ -46,8 +78,24 @@ export default function ExpenseTracker() {
   });
 
   useEffect(() => {
+    const savedTheme = localStorage.getItem('theme');
+    if (savedTheme === 'dark') {
+      setDarkMode(true);
+      document.documentElement.classList.add('dark');
+    }
     checkAuth();
   }, []);
+
+  const toggleDarkMode = () => {
+    setDarkMode(!darkMode);
+    if (!darkMode) {
+      document.documentElement.classList.add('dark');
+      localStorage.setItem('theme', 'dark');
+    } else {
+      document.documentElement.classList.remove('dark');
+      localStorage.setItem('theme', 'light');
+    }
+  };
 
   const checkAuth = async () => {
     const token = localStorage.getItem('token');
@@ -65,12 +113,14 @@ export default function ExpenseTracker() {
 
   const loadUserData = async () => {
     try {
-      const [expensesRes, budgetsRes] = await Promise.all([
+      const [expensesRes, budgetsRes, recurringRes] = await Promise.all([
         api.get('/expenses'),
-        api.get('/budgets')
+        api.get('/budgets'),
+        api.get('/recurring').catch(() => ({ data: [] }))
       ]);
       setExpenses(expensesRes.data);
       setBudgets(budgetsRes.data);
+      setRecurringExpenses(recurringRes.data);
     } catch (error) {
       console.error('Error loading data:', error);
     }
@@ -99,6 +149,7 @@ export default function ExpenseTracker() {
     setCurrentUser(null);
     setExpenses([]);
     setBudgets([]);
+    setRecurringExpenses([]);
   };
 
   const handleAddExpense = async (e) => {
@@ -119,16 +170,36 @@ export default function ExpenseTracker() {
       await loadUserData();
       setShowAddExpense(false);
       setEditingExpense(null);
-      setExpenseForm({
-        amount: '',
-        category: 'Food & Dining',
-        description: '',
-        date: new Date().toISOString().split('T')[0],
-        paymentMethod: 'Cash',
-        type: 'expense'
-      });
+      resetExpenseForm();
     } catch (error) {
       alert(error.response?.data?.message || 'Error saving transaction');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleAddRecurring = async (e) => {
+    e.preventDefault();
+    setLoading(true);
+    try {
+      const recurringData = {
+        ...recurringForm,
+        amount: parseFloat(recurringForm.amount),
+        dayOfMonth: parseInt(recurringForm.dayOfMonth)
+      };
+      
+      if (editingRecurring) {
+        await api.put(`/recurring/${editingRecurring._id}`, recurringData);
+      } else {
+        await api.post('/recurring', recurringData);
+      }
+      
+      await loadUserData();
+      setShowAddRecurring(false);
+      setEditingRecurring(null);
+      resetRecurringForm();
+    } catch (error) {
+      alert(error.response?.data?.message || 'Error saving recurring expense');
     } finally {
       setLoading(false);
     }
@@ -145,6 +216,17 @@ export default function ExpenseTracker() {
     }
   };
 
+  const handleDeleteRecurring = async (id) => {
+    if (window.confirm('Are you sure you want to delete this recurring expense?')) {
+      try {
+        await api.delete(`/recurring/${id}`);
+        await loadUserData();
+      } catch (error) {
+        alert('Error deleting recurring expense');
+      }
+    }
+  };
+
   const handleEditExpense = (expense) => {
     setEditingExpense(expense);
     setExpenseForm({
@@ -156,6 +238,21 @@ export default function ExpenseTracker() {
       type: expense.type
     });
     setShowAddExpense(true);
+  };
+
+  const handleEditRecurring = (recurring) => {
+    setEditingRecurring(recurring);
+    setRecurringForm({
+      amount: recurring.amount.toString(),
+      category: recurring.category,
+      description: recurring.description,
+      paymentMethod: recurring.paymentMethod,
+      type: recurring.type,
+      frequency: recurring.frequency,
+      startDate: recurring.startDate.split('T')[0],
+      dayOfMonth: recurring.dayOfMonth.toString()
+    });
+    setShowAddRecurring(true);
   };
 
   const handleAddBudget = async (e) => {
@@ -181,9 +278,90 @@ export default function ExpenseTracker() {
     }
   };
 
+  const resetExpenseForm = () => {
+    setExpenseForm({
+      amount: '',
+      category: 'Food & Dining',
+      description: '',
+      date: new Date().toISOString().split('T')[0],
+      paymentMethod: 'Cash',
+      type: 'expense'
+    });
+  };
+
+  const resetRecurringForm = () => {
+    setRecurringForm({
+      amount: '',
+      category: 'Food & Dining',
+      description: '',
+      paymentMethod: 'Cash',
+      type: 'expense',
+      frequency: 'monthly',
+      startDate: new Date().toISOString().split('T')[0],
+      dayOfMonth: '1'
+    });
+  };
+
+  const clearFilters = () => {
+    setFilters({
+      category: '',
+      type: '',
+      paymentMethod: '',
+      startDate: '',
+      endDate: '',
+      minAmount: '',
+      maxAmount: ''
+    });
+    setSearchTerm('');
+  };
+
+  // Filter and search expenses
+  const getFilteredExpenses = () => {
+    let filtered = [...expenses];
+
+    // Search by description
+    if (searchTerm) {
+      filtered = filtered.filter(e => 
+        e.description.toLowerCase().includes(searchTerm.toLowerCase())
+      );
+    }
+
+    // Apply filters
+    if (filters.category) {
+      filtered = filtered.filter(e => e.category === filters.category);
+    }
+    if (filters.type) {
+      filtered = filtered.filter(e => e.type === filters.type);
+    }
+    if (filters.paymentMethod) {
+      filtered = filtered.filter(e => e.paymentMethod === filters.paymentMethod);
+    }
+    if (filters.startDate) {
+      filtered = filtered.filter(e => e.date >= filters.startDate);
+    }
+    if (filters.endDate) {
+      filtered = filtered.filter(e => e.date <= filters.endDate);
+    }
+    if (filters.minAmount) {
+      filtered = filtered.filter(e => e.amount >= parseFloat(filters.minAmount));
+    }
+    if (filters.maxAmount) {
+      filtered = filtered.filter(e => e.amount <= parseFloat(filters.maxAmount));
+    }
+
+    return filtered;
+  };
+
+  // Pagination logic
+  const filteredExpenses = getFilteredExpenses();
+  const indexOfLastItem = currentPage * itemsPerPage;
+  const indexOfFirstItem = indexOfLastItem - itemsPerPage;
+  const currentExpenses = filteredExpenses.slice(indexOfFirstItem, indexOfLastItem);
+  const totalPages = Math.ceil(filteredExpenses.length / itemsPerPage);
+
   const exportToCSV = () => {
     const headers = ['Date', 'Category', 'Description', 'Amount', 'Type', 'Payment Method'];
-    const rows = expenses.map(e => [
+    const rows = filteredExpenses.map(e => [
       e.date.split('T')[0],
       e.category,
       e.description,
@@ -240,12 +418,12 @@ export default function ExpenseTracker() {
 
   if (!currentUser) {
     return (
-      <div className="min-h-screen bg-gradient-to-br from-blue-50 to-indigo-100 flex items-center justify-center p-4">
-        <div className="bg-white rounded-2xl shadow-2xl p-8 w-full max-w-md">
+      <div className={`min-h-screen ${darkMode ? 'bg-gray-900' : 'bg-gradient-to-br from-blue-50 to-indigo-100'} flex items-center justify-center p-4`}>
+        <div className={`${darkMode ? 'bg-gray-800' : 'bg-white'} rounded-2xl shadow-2xl p-8 w-full max-w-md`}>
           <div className="text-center mb-8">
-            <Wallet className="w-16 h-16 text-blue-600 mx-auto mb-4" />
-            <h1 className="text-3xl font-bold text-gray-800">Expense Tracker</h1>
-            <p className="text-gray-600 mt-2">Manage your finances efficiently</p>
+            <Wallet className={`w-16 h-16 ${darkMode ? 'text-blue-400' : 'text-blue-600'} mx-auto mb-4`} />
+            <h1 className={`text-3xl font-bold ${darkMode ? 'text-white' : 'text-gray-800'}`}>Expense Tracker</h1>
+            <p className={`${darkMode ? 'text-gray-400' : 'text-gray-600'} mt-2`}>Manage your finances efficiently</p>
           </div>
 
           <form onSubmit={handleAuth} className="space-y-4">
@@ -253,7 +431,7 @@ export default function ExpenseTracker() {
               <input
                 type="text"
                 placeholder="Full Name"
-                className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                className={`w-full px-4 py-3 border ${darkMode ? 'border-gray-600 bg-gray-700 text-white' : 'border-gray-300'} rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent`}
                 value={authForm.name}
                 onChange={(e) => setAuthForm({ ...authForm, name: e.target.value })}
                 required
@@ -262,7 +440,7 @@ export default function ExpenseTracker() {
             <input
               type="email"
               placeholder="Email"
-              className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+              className={`w-full px-4 py-3 border ${darkMode ? 'border-gray-600 bg-gray-700 text-white' : 'border-gray-300'} rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent`}
               value={authForm.email}
               onChange={(e) => setAuthForm({ ...authForm, email: e.target.value })}
               required
@@ -270,7 +448,7 @@ export default function ExpenseTracker() {
             <input
               type="password"
               placeholder="Password"
-              className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+              className={`w-full px-4 py-3 border ${darkMode ? 'border-gray-600 bg-gray-700 text-white' : 'border-gray-300'} rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent`}
               value={authForm.password}
               onChange={(e) => setAuthForm({ ...authForm, password: e.target.value })}
               required
@@ -284,7 +462,7 @@ export default function ExpenseTracker() {
             </button>
           </form>
 
-          <p className="text-center mt-6 text-gray-600">
+          <p className={`text-center mt-6 ${darkMode ? 'text-gray-400' : 'text-gray-600'}`}>
             {isLogin ? "Don't have an account?" : "Already have an account?"}
             <button
               onClick={() => setIsLogin(!isLogin)}
@@ -299,16 +477,22 @@ export default function ExpenseTracker() {
   }
 
   return (
-    <div className="min-h-screen bg-gray-50">
+    <div className={`min-h-screen ${darkMode ? 'bg-gray-900' : 'bg-gray-50'}`}>
       {/* Header */}
-      <header className="bg-white shadow-sm border-b">
+      <header className={`${darkMode ? 'bg-gray-800 border-gray-700' : 'bg-white'} shadow-sm border-b`}>
         <div className="max-w-7xl mx-auto px-4 py-4 flex justify-between items-center">
           <div className="flex items-center gap-3">
-            <Wallet className="w-8 h-8 text-blue-600" />
-            <h1 className="text-2xl font-bold text-gray-800">Expense Tracker</h1>
+            <Wallet className={`w-8 h-8 ${darkMode ? 'text-blue-400' : 'text-blue-600'}`} />
+            <h1 className={`text-2xl font-bold ${darkMode ? 'text-white' : 'text-gray-800'}`}>Expense Tracker</h1>
           </div>
           <div className="flex items-center gap-4">
-            <span className="text-gray-700 flex items-center gap-2">
+            <button
+              onClick={toggleDarkMode}
+              className={`p-2 rounded-lg ${darkMode ? 'bg-gray-700 text-yellow-400' : 'bg-gray-100 text-gray-600'} hover:opacity-80 transition`}
+            >
+              {darkMode ? <Sun className="w-5 h-5" /> : <Moon className="w-5 h-5" />}
+            </button>
+            <span className={`${darkMode ? 'text-gray-300' : 'text-gray-700'} flex items-center gap-2`}>
               <User className="w-5 h-5" />
               {currentUser.name}
             </span>
@@ -324,17 +508,17 @@ export default function ExpenseTracker() {
       </header>
 
       {/* Navigation */}
-      <nav className="bg-white shadow-sm border-b">
+      <nav className={`${darkMode ? 'bg-gray-800 border-gray-700' : 'bg-white'} shadow-sm border-b`}>
         <div className="max-w-7xl mx-auto px-4">
           <div className="flex gap-2">
-            {['dashboard', 'expenses', 'budgets', 'analytics'].map(tab => (
+            {['dashboard', 'expenses', 'recurring', 'budgets', 'analytics'].map(tab => (
               <button
                 key={tab}
                 onClick={() => setActiveTab(tab)}
                 className={`px-6 py-3 font-medium capitalize transition ${
                   activeTab === tab
-                    ? 'text-blue-600 border-b-2 border-blue-600'
-                    : 'text-gray-600 hover:text-gray-800'
+                    ? `${darkMode ? 'text-blue-400' : 'text-blue-600'} border-b-2 ${darkMode ? 'border-blue-400' : 'border-blue-600'}`
+                    : `${darkMode ? 'text-gray-400 hover:text-gray-200' : 'text-gray-600 hover:text-gray-800'}`
                 }`}
               >
                 {tab}
@@ -350,10 +534,10 @@ export default function ExpenseTracker() {
           <div className="space-y-6">
             {/* Stats Cards */}
             <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-              <div className="bg-white p-6 rounded-xl shadow-sm border border-gray-200">
+              <div className={`${darkMode ? 'bg-gray-800 border-gray-700' : 'bg-white border-gray-200'} p-6 rounded-xl shadow-sm border`}>
                 <div className="flex items-center justify-between">
                   <div>
-                    <p className="text-gray-600 text-sm">Total Income</p>
+                    <p className={`${darkMode ? 'text-gray-400' : 'text-gray-600'} text-sm`}>Total Income</p>
                     <p className="text-3xl font-bold text-green-600 mt-2">
                       ${totalIncome.toFixed(2)}
                     </p>
@@ -362,10 +546,10 @@ export default function ExpenseTracker() {
                 </div>
               </div>
 
-              <div className="bg-white p-6 rounded-xl shadow-sm border border-gray-200">
+              <div className={`${darkMode ? 'bg-gray-800 border-gray-700' : 'bg-white border-gray-200'} p-6 rounded-xl shadow-sm border`}>
                 <div className="flex items-center justify-between">
                   <div>
-                    <p className="text-gray-600 text-sm">Total Expenses</p>
+                    <p className={`${darkMode ? 'text-gray-400' : 'text-gray-600'} text-sm`}>Total Expenses</p>
                     <p className="text-3xl font-bold text-red-600 mt-2">
                       ${totalExpense.toFixed(2)}
                     </p>
@@ -374,10 +558,10 @@ export default function ExpenseTracker() {
                 </div>
               </div>
 
-              <div className="bg-white p-6 rounded-xl shadow-sm border border-gray-200">
+              <div className={`${darkMode ? 'bg-gray-800 border-gray-700' : 'bg-white border-gray-200'} p-6 rounded-xl shadow-sm border`}>
                 <div className="flex items-center justify-between">
                   <div>
-                    <p className="text-gray-600 text-sm">Balance</p>
+                    <p className={`${darkMode ? 'text-gray-400' : 'text-gray-600'} text-sm`}>Balance</p>
                     <p className={`text-3xl font-bold mt-2 ${balance >= 0 ? 'text-blue-600' : 'text-red-600'}`}>
                       ${balance.toFixed(2)}
                     </p>
@@ -389,14 +573,14 @@ export default function ExpenseTracker() {
 
             {/* Charts */}
             <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-              <div className="bg-white p-6 rounded-xl shadow-sm border border-gray-200">
-                <h3 className="text-lg font-semibold mb-4">Income vs Expenses</h3>
+              <div className={`${darkMode ? 'bg-gray-800 border-gray-700' : 'bg-white border-gray-200'} p-6 rounded-xl shadow-sm border`}>
+                <h3 className={`text-lg font-semibold mb-4 ${darkMode ? 'text-white' : ''}`}>Income vs Expenses</h3>
                 <ResponsiveContainer width="100%" height={300}>
                   <BarChart data={chartData}>
-                    <CartesianGrid strokeDasharray="3 3" />
-                    <XAxis dataKey="month" />
-                    <YAxis />
-                    <Tooltip />
+                    <CartesianGrid strokeDasharray="3 3" stroke={darkMode ? '#374151' : '#e5e7eb'} />
+                    <XAxis dataKey="month" stroke={darkMode ? '#9ca3af' : '#6b7280'} />
+                    <YAxis stroke={darkMode ? '#9ca3af' : '#6b7280'} />
+                    <Tooltip contentStyle={{ backgroundColor: darkMode ? '#1f2937' : '#fff', border: darkMode ? '1px solid #374151' : '1px solid #e5e7eb' }} />
                     <Legend />
                     <Bar dataKey="income" fill="#10b981" />
                     <Bar dataKey="expense" fill="#ef4444" />
@@ -404,8 +588,8 @@ export default function ExpenseTracker() {
                 </ResponsiveContainer>
               </div>
 
-              <div className="bg-white p-6 rounded-xl shadow-sm border border-gray-200">
-                <h3 className="text-lg font-semibold mb-4">Expenses by Category</h3>
+              <div className={`${darkMode ? 'bg-gray-800 border-gray-700' : 'bg-white border-gray-200'} p-6 rounded-xl shadow-sm border`}>
+                <h3 className={`text-lg font-semibold mb-4 ${darkMode ? 'text-white' : ''}`}>Expenses by Category</h3>
                 {categoryData.length > 0 ? (
                   <ResponsiveContainer width="100%" height={300}>
                     <RechartsPie>
@@ -423,11 +607,11 @@ export default function ExpenseTracker() {
                           <Cell key={`cell-${index}`} fill={COLORS[index % COLORS.length]} />
                         ))}
                       </Pie>
-                      <Tooltip />
+                      <Tooltip contentStyle={{ backgroundColor: darkMode ? '#1f2937' : '#fff' }} />
                     </RechartsPie>
                   </ResponsiveContainer>
                 ) : (
-                  <div className="h-[300px] flex items-center justify-center text-gray-500">
+                  <div className={`h-[300px] flex items-center justify-center ${darkMode ? 'text-gray-500' : 'text-gray-500'}`}>
                     No expense data available
                   </div>
                 )}
@@ -435,12 +619,12 @@ export default function ExpenseTracker() {
             </div>
 
             {/* Recent Transactions */}
-            <div className="bg-white p-6 rounded-xl shadow-sm border border-gray-200">
-              <h3 className="text-lg font-semibold mb-4">Recent Transactions</h3>
+            <div className={`${darkMode ? 'bg-gray-800 border-gray-700' : 'bg-white border-gray-200'} p-6 rounded-xl shadow-sm border`}>
+              <h3 className={`text-lg font-semibold mb-4 ${darkMode ? 'text-white' : ''}`}>Recent Transactions</h3>
               {expenses.length > 0 ? (
                 <div className="space-y-3">
                   {expenses.slice(-5).reverse().map(expense => (
-                    <div key={expense._id} className="flex items-center justify-between p-3 bg-gray-50 rounded-lg">
+                    <div key={expense._id} className={`flex items-center justify-between p-3 ${darkMode ? 'bg-gray-700' : 'bg-gray-50'} rounded-lg`}>
                       <div className="flex items-center gap-3">
                         <div className={`w-10 h-10 rounded-full flex items-center justify-center ${
                           expense.type === 'income' ? 'bg-green-100' : 'bg-red-100'
@@ -452,8 +636,8 @@ export default function ExpenseTracker() {
                           )}
                         </div>
                         <div>
-                          <p className="font-medium">{expense.description}</p>
-                          <p className="text-sm text-gray-600">{expense.category} • {expense.date.split('T')[0]}</p>
+                          <p className={`font-medium ${darkMode ? 'text-white' : ''}`}>{expense.description}</p>
+                          <p className={`text-sm ${darkMode ? 'text-gray-400' : 'text-gray-600'}`}>{expense.category} • {expense.date.split('T')[0]}</p>
                         </div>
                       </div>
                       <p className={`font-semibold ${expense.type === 'income' ? 'text-green-600' : 'text-red-600'}`}>
@@ -463,7 +647,7 @@ export default function ExpenseTracker() {
                   ))}
                 </div>
               ) : (
-                <p className="text-gray-500 text-center py-8">No transactions yet. Add your first transaction!</p>
+                <p className={`${darkMode ? 'text-gray-500' : 'text-gray-500'} text-center py-8`}>No transactions yet. Add your first transaction!</p>
               )}
             </div>
           </div>
@@ -472,97 +656,339 @@ export default function ExpenseTracker() {
         {/* Expenses Tab */}
         {activeTab === 'expenses' && (
           <div className="space-y-6">
-            <div className="flex justify-between items-center">
-              <h2 className="text-2xl font-bold">All Transactions</h2>
-              <div className="flex gap-3">
+            <div className="flex flex-col md:flex-row gap-4 justify-between items-start md:items-center">
+              <h2 className={`text-2xl font-bold ${darkMode ? 'text-white' : ''}`}>All Transactions</h2>
+              
+              {/* Search and Filter Bar */}
+              <div className="flex flex-wrap gap-3 w-full md:w-auto">
+                <div className="relative flex-1 md:flex-initial">
+                  <Search className={`absolute left-3 top-1/2 transform -translate-y-1/2 w-4 h-4 ${darkMode ? 'text-gray-500' : 'text-gray-400'}`} />
+                  <input
+                    type="text"
+                    placeholder="Search transactions..."
+                    className={`pl-10 pr-4 py-2 border ${darkMode ? 'border-gray-600 bg-gray-700 text-white' : 'border-gray-300'} rounded-lg focus:ring-2 focus:ring-blue-500 w-full md:w-64`}
+                    value={searchTerm}
+                    onChange={(e) => setSearchTerm(e.target.value)}
+                  />
+                </div>
+                
+                <button
+                  onClick={() => setShowFilters(!showFilters)}
+                  className={`flex items-center gap-2 px-4 py-2 ${darkMode ? 'bg-gray-700 text-white' : 'bg-gray-100 text-gray-700'} rounded-lg hover:opacity-80 transition`}
+                >
+                  <Filter className="w-4 h-4" />
+                  Filters
+                </button>
+
                 <button
                   onClick={exportToCSV}
                   disabled={expenses.length === 0}
                   className="flex items-center gap-2 px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 transition disabled:opacity-50 disabled:cursor-not-allowed"
                 >
                   <Download className="w-4 h-4" />
-                  Export CSV
+                  Export
                 </button>
+                
                 <button
                   onClick={() => {
                     setShowAddExpense(true);
                     setEditingExpense(null);
-                    setExpenseForm({
-                      amount: '',
-                      category: 'Food & Dining',
-                      description: '',
-                      date: new Date().toISOString().split('T')[0],
-                      paymentMethod: 'Cash',
-                      type: 'expense'
-                    });
+                    resetExpenseForm();
                   }}
                   className="flex items-center gap-2 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition"
                 >
                   <PlusCircle className="w-4 h-4" />
-                  Add Transaction
+                  Add
                 </button>
               </div>
             </div>
 
-            <div className="bg-white rounded-xl shadow-sm border border-gray-200 overflow-x-auto">
-              {expenses.length > 0 ? (
-                <table className="w-full">
-                  <thead className="bg-gray-50 border-b">
-                    <tr>
-                      <th className="px-6 py-3 text-left text-sm font-semibold text-gray-700">Date</th>
-                      <th className="px-6 py-3 text-left text-sm font-semibold text-gray-700">Description</th>
-                      <th className="px-6 py-3 text-left text-sm font-semibold text-gray-700">Category</th>
-                      <th className="px-6 py-3 text-left text-sm font-semibold text-gray-700">Payment</th>
-                      <th className="px-6 py-3 text-left text-sm font-semibold text-gray-700">Amount</th>
-                      <th className="px-6 py-3 text-left text-sm font-semibold text-gray-700">Actions</th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y">
-                    {expenses.map(expense => (
-                      <tr key={expense._id} className="hover:bg-gray-50">
-                        <td className="px-6 py-4 text-sm">{expense.date.split('T')[0]}</td>
-                        <td className="px-6 py-4 text-sm font-medium">{expense.description}</td>
-                        <td className="px-6 py-4 text-sm">{expense.category}</td>
-                        <td className="px-6 py-4 text-sm">{expense.paymentMethod}</td>
-                        <td className="px-6 py-4 text-sm">
-                          <span className={`font-semibold ${expense.type === 'income' ? 'text-green-600' : 'text-red-600'}`}>
-                            {expense.type === 'income' ? '+' : '-'}${expense.amount.toFixed(2)}
-                          </span>
-                        </td>
-                        <td className="px-6 py-4 text-sm">
-                          <div className="flex gap-2">
-                            <button
-                              onClick={() => handleEditExpense(expense)}
-                              className="p-1 text-blue-600 hover:bg-blue-50 rounded"
-                            >
-                              <Edit2 className="w-4 h-4" />
-                            </button>
-                            <button
-                              onClick={() => handleDeleteExpense(expense._id)}
-                              className="p-1 text-red-600 hover:bg-red-50 rounded"
-                            >
-                              <Trash2 className="w-4 h-4" />
-                            </button>
-                          </div>
-                        </td>
+            {/* Advanced Filters Panel */}
+            {showFilters && (
+              <div className={`${darkMode ? 'bg-gray-800 border-gray-700' : 'bg-white border-gray-200'} p-6 rounded-xl shadow-sm border`}>
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                  <div>
+                    <label className={`block text-sm font-medium ${darkMode ? 'text-gray-300' : 'text-gray-700'} mb-2`}>Category</label>
+                    <select
+                      className={`w-full px-4 py-2 border ${darkMode ? 'border-gray-600 bg-gray-700 text-white' : 'border-gray-300'} rounded-lg`}
+                      value={filters.category}
+                      onChange={(e) => setFilters({ ...filters, category: e.target.value })}
+                    >
+                      <option value="">All Categories</option>
+                      {CATEGORIES.map(cat => (
+                        <option key={cat} value={cat}>{cat}</option>
+                      ))}
+                    </select>
+                  </div>
+
+                  <div>
+                    <label className={`block text-sm font-medium ${darkMode ? 'text-gray-300' : 'text-gray-700'} mb-2`}>Type</label>
+                    <select
+                      className={`w-full px-4 py-2 border ${darkMode ? 'border-gray-600 bg-gray-700 text-white' : 'border-gray-300'} rounded-lg`}
+                      value={filters.type}
+                      onChange={(e) => setFilters({ ...filters, type: e.target.value })}
+                    >
+                      <option value="">All Types</option>
+                      <option value="income">Income</option>
+                      <option value="expense">Expense</option>
+                    </select>
+                  </div>
+
+                  <div>
+                    <label className={`block text-sm font-medium ${darkMode ? 'text-gray-300' : 'text-gray-700'} mb-2`}>Payment Method</label>
+                    <select
+                      className={`w-full px-4 py-2 border ${darkMode ? 'border-gray-600 bg-gray-700 text-white' : 'border-gray-300'} rounded-lg`}
+                      value={filters.paymentMethod}
+                      onChange={(e) => setFilters({ ...filters, paymentMethod: e.target.value })}
+                    >
+                      <option value="">All Methods</option>
+                      <option value="Cash">Cash</option>
+                      <option value="Credit Card">Credit Card</option>
+                      <option value="Debit Card">Debit Card</option>
+                      <option value="Bank Transfer">Bank Transfer</option>
+                      <option value="Digital Wallet">Digital Wallet</option>
+                    </select>
+                  </div>
+
+                  <div>
+                    <label className={`block text-sm font-medium ${darkMode ? 'text-gray-300' : 'text-gray-700'} mb-2`}>Start Date</label>
+                    <input
+                      type="date"
+                      className={`w-full px-4 py-2 border ${darkMode ? 'border-gray-600 bg-gray-700 text-white' : 'border-gray-300'} rounded-lg`}
+                      value={filters.startDate}
+                      onChange={(e) => setFilters({ ...filters, startDate: e.target.value })}
+                    />
+                  </div>
+
+                  <div>
+                    <label className={`block text-sm font-medium ${darkMode ? 'text-gray-300' : 'text-gray-700'} mb-2`}>End Date</label>
+                    <input
+                      type="date"
+                      className={`w-full px-4 py-2 border ${darkMode ? 'border-gray-600 bg-gray-700 text-white' : 'border-gray-300'} rounded-lg`}
+                      value={filters.endDate}
+                      onChange={(e) => setFilters({ ...filters, endDate: e.target.value })}
+                    />
+                  </div>
+
+                  <div>
+                    <label className={`block text-sm font-medium ${darkMode ? 'text-gray-300' : 'text-gray-700'} mb-2`}>Amount Range</label>
+                    <div className="flex gap-2">
+                      <input
+                        type="number"
+                        placeholder="Min"
+                        className={`w-1/2 px-4 py-2 border ${darkMode ? 'border-gray-600 bg-gray-700 text-white' : 'border-gray-300'} rounded-lg`}
+                        value={filters.minAmount}
+                        onChange={(e) => setFilters({ ...filters, minAmount: e.target.value })}
+                      />
+                      <input
+                        type="number"
+                        placeholder="Max"
+                        className={`w-1/2 px-4 py-2 border ${darkMode ? 'border-gray-600 bg-gray-700 text-white' : 'border-gray-300'} rounded-lg`}
+                        value={filters.maxAmount}
+                        onChange={(e) => setFilters({ ...filters, maxAmount: e.target.value })}
+                      />
+                    </div>
+                  </div>
+                </div>
+
+                <div className="flex gap-3 mt-4">
+                  <button
+                    onClick={clearFilters}
+                    className={`px-4 py-2 ${darkMode ? 'bg-gray-700 text-white' : 'bg-gray-100 text-gray-700'} rounded-lg hover:opacity-80 transition`}
+                  >
+                    Clear Filters
+                  </button>
+                  <div className={`flex-1 text-sm ${darkMode ? 'text-gray-400' : 'text-gray-600'} flex items-center`}>
+                    Showing {filteredExpenses.length} of {expenses.length} transactions
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {/* Transactions Table */}
+            <div className={`${darkMode ? 'bg-gray-800 border-gray-700' : 'bg-white border-gray-200'} rounded-xl shadow-sm border overflow-x-auto`}>
+              {currentExpenses.length > 0 ? (
+                <>
+                  <table className="w-full">
+                    <thead className={`${darkMode ? 'bg-gray-700' : 'bg-gray-50'} border-b ${darkMode ? 'border-gray-600' : ''}`}>
+                      <tr>
+                        <th className={`px-6 py-3 text-left text-sm font-semibold ${darkMode ? 'text-gray-300' : 'text-gray-700'}`}>Date</th>
+                        <th className={`px-6 py-3 text-left text-sm font-semibold ${darkMode ? 'text-gray-300' : 'text-gray-700'}`}>Description</th>
+                        <th className={`px-6 py-3 text-left text-sm font-semibold ${darkMode ? 'text-gray-300' : 'text-gray-700'}`}>Category</th>
+                        <th className={`px-6 py-3 text-left text-sm font-semibold ${darkMode ? 'text-gray-300' : 'text-gray-700'}`}>Payment</th>
+                        <th className={`px-6 py-3 text-left text-sm font-semibold ${darkMode ? 'text-gray-300' : 'text-gray-700'}`}>Amount</th>
+                        <th className={`px-6 py-3 text-left text-sm font-semibold ${darkMode ? 'text-gray-300' : 'text-gray-700'}`}>Actions</th>
                       </tr>
-                    ))}
-                  </tbody>
-                </table>
+                    </thead>
+                    <tbody className="divide-y">
+                      {currentExpenses.map(expense => (
+                        <tr key={expense._id} className={`${darkMode ? 'hover:bg-gray-700' : 'hover:bg-gray-50'}`}>
+                          <td className={`px-6 py-4 text-sm ${darkMode ? 'text-gray-300' : ''}`}>{expense.date.split('T')[0]}</td>
+                          <td className={`px-6 py-4 text-sm font-medium ${darkMode ? 'text-white' : ''}`}>{expense.description}</td>
+                          <td className={`px-6 py-4 text-sm ${darkMode ? 'text-gray-300' : ''}`}>{expense.category}</td>
+                          <td className={`px-6 py-4 text-sm ${darkMode ? 'text-gray-300' : ''}`}>{expense.paymentMethod}</td>
+                          <td className="px-6 py-4 text-sm">
+                            <span className={`font-semibold ${expense.type === 'income' ? 'text-green-600' : 'text-red-600'}`}>
+                              {expense.type === 'income' ? '+' : '-'}${expense.amount.toFixed(2)}
+                            </span>
+                          </td>
+                          <td className="px-6 py-4 text-sm">
+                            <div className="flex gap-2">
+                              <button
+                                onClick={() => handleEditExpense(expense)}
+                                className="p-1 text-blue-600 hover:bg-blue-50 rounded"
+                              >
+                                <Edit2 className="w-4 h-4" />
+                              </button>
+                              <button
+                                onClick={() => handleDeleteExpense(expense._id)}
+                                className="p-1 text-red-600 hover:bg-red-50 rounded"
+                              >
+                                <Trash2 className="w-4 h-4" />
+                              </button>
+                            </div>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+
+                  {/* Pagination */}
+                  {totalPages > 1 && (
+                    <div className={`px-6 py-4 border-t ${darkMode ? 'border-gray-700' : ''} flex items-center justify-between`}>
+                      <div className={`text-sm ${darkMode ? 'text-gray-400' : 'text-gray-600'}`}>
+                        Showing {indexOfFirstItem + 1} to {Math.min(indexOfLastItem, filteredExpenses.length)} of {filteredExpenses.length} entries
+                      </div>
+                      <div className="flex gap-2">
+                        <button
+                          onClick={() => setCurrentPage(prev => Math.max(prev - 1, 1))}
+                          disabled={currentPage === 1}
+                          className={`px-3 py-1 rounded ${darkMode ? 'bg-gray-700 text-white' : 'bg-gray-100 text-gray-700'} disabled:opacity-50 disabled:cursor-not-allowed hover:opacity-80`}
+                        >
+                          <ChevronLeft className="w-4 h-4" />
+                        </button>
+                        {[...Array(totalPages)].map((_, i) => (
+                          <button
+                            key={i + 1}
+                            onClick={() => setCurrentPage(i + 1)}
+                            className={`px-3 py-1 rounded ${
+                              currentPage === i + 1
+                                ? 'bg-blue-600 text-white'
+                                : darkMode ? 'bg-gray-700 text-white hover:opacity-80' : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
+                            }`}
+                          >
+                            {i + 1}
+                          </button>
+                        ))}
+                        <button
+                          onClick={() => setCurrentPage(prev => Math.min(prev + 1, totalPages))}
+                          disabled={currentPage === totalPages}
+                          className={`px-3 py-1 rounded ${darkMode ? 'bg-gray-700 text-white' : 'bg-gray-100 text-gray-700'} disabled:opacity-50 disabled:cursor-not-allowed hover:opacity-80`}
+                        >
+                          <ChevronRight className="w-4 h-4" />
+                        </button>
+                      </div>
+                    </div>
+                  )}
+                </>
               ) : (
-                <div className="p-8 text-center text-gray-500">
-                  <p>No transactions found. Click "Add Transaction" to get started!</p>
+                <div className={`p-8 text-center ${darkMode ? 'text-gray-500' : 'text-gray-500'}`}>
+                  <p>No transactions found. {searchTerm || Object.values(filters).some(v => v) ? 'Try adjusting your filters.' : 'Click "Add" to get started!'}</p>
                 </div>
               )}
             </div>
           </div>
         )}
 
-        {/* Budgets Tab */}
+        {/* Recurring Expenses Tab */}
+        {activeTab === 'recurring' && (
+          <div className="space-y-6">
+            <div className="flex justify-between items-center">
+              <h2 className={`text-2xl font-bold ${darkMode ? 'text-white' : ''}`}>Recurring Expenses</h2>
+              <button
+                onClick={() => {
+                  setShowAddRecurring(true);
+                  setEditingRecurring(null);
+                  resetRecurringForm();
+                }}
+                className="flex items-center gap-2 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition"
+              >
+                <RefreshCw className="w-4 h-4" />
+                Add Recurring
+              </button>
+            </div>
+
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+              {recurringExpenses.length > 0 ? recurringExpenses.map(recurring => (
+                <div key={recurring._id} className={`${darkMode ? 'bg-gray-800 border-gray-700' : 'bg-white border-gray-200'} p-6 rounded-xl shadow-sm border`}>
+                  <div className="flex justify-between items-start mb-4">
+                    <div>
+                      <h3 className={`font-semibold text-lg ${darkMode ? 'text-white' : ''}`}>{recurring.description}</h3>
+                      <p className={`text-sm ${darkMode ? 'text-gray-400' : 'text-gray-600'}`}>{recurring.category}</p>
+                    </div>
+                    <span className={`px-3 py-1 rounded-full text-xs font-medium ${
+                      recurring.type === 'income' ? 'bg-green-100 text-green-800' : 'bg-red-100 text-red-800'
+                    }`}>
+                      {recurring.type}
+                    </span>
+                  </div>
+                  
+                  <div className="space-y-2">
+                    <div className="flex justify-between text-sm">
+                      <span className={darkMode ? 'text-gray-400' : 'text-gray-600'}>Amount</span>
+                      <span className={`font-semibold ${recurring.type === 'income' ? 'text-green-600' : 'text-red-600'}`}>
+                        ${recurring.amount.toFixed(2)}
+                      </span>
+                    </div>
+                    <div className="flex justify-between text-sm">
+                      <span className={darkMode ? 'text-gray-400' : 'text-gray-600'}>Frequency</span>
+                      <span className={`font-medium ${darkMode ? 'text-white' : ''}`}>{recurring.frequency}</span>
+                    </div>
+                    <div className="flex justify-between text-sm">
+                      <span className={darkMode ? 'text-gray-400' : 'text-gray-600'}>Day of Month</span>
+                      <span className={`font-medium ${darkMode ? 'text-white' : ''}`}>{recurring.dayOfMonth}</span>
+                    </div>
+                    <div className="flex justify-between text-sm">
+                      <span className={darkMode ? 'text-gray-400' : 'text-gray-600'}>Payment Method</span>
+                      <span className={`font-medium ${darkMode ? 'text-white' : ''}`}>{recurring.paymentMethod}</span>
+                    </div>
+                  </div>
+
+                  <div className="flex gap-2 mt-4 pt-4 border-t">
+                    <button
+                      onClick={() => handleEditRecurring(recurring)}
+                      className="flex-1 flex items-center justify-center gap-2 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition"
+                    >
+                      <Edit2 className="w-4 h-4" />
+                      Edit
+                    </button>
+                    <button
+                      onClick={() => handleDeleteRecurring(recurring._id)}
+                      className="flex-1 flex items-center justify-center gap-2 px-4 py-2 bg-red-600 text-white rounded-lg hover:bg-red-700 transition"
+                    >
+                      <Trash2 className="w-4 h-4" />
+                      Delete
+                    </button>
+                  </div>
+                </div>
+              )) : (
+                <div className={`col-span-2 ${darkMode ? 'bg-gray-800 border-gray-700' : 'bg-white border-gray-200'} p-8 rounded-xl shadow-sm border text-center ${darkMode ? 'text-gray-500' : 'text-gray-500'}`}>
+                  <Calendar className="w-16 h-16 mx-auto mb-4 opacity-50" />
+                  <p>No recurring expenses set up yet.</p>
+                  <p className="text-sm mt-2">Click "Add Recurring" to create automated monthly transactions.</p>
+                </div>
+              )}
+            </div>
+          </div>
+        )}
+
+        {/* Budgets and Analytics tabs remain similar, just add dark mode classes */}
+        {/* For brevity, I'll skip to the modals */}
+
         {activeTab === 'budgets' && (
           <div className="space-y-6">
             <div className="flex justify-between items-center">
-              <h2 className="text-2xl font-bold">Budget Management</h2>
+              <h2 className={`text-2xl font-bold ${darkMode ? 'text-white' : ''}`}>Budget Management</h2>
               <button
                 onClick={() => setShowAddBudget(true)}
                 className="flex items-center gap-2 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition"
@@ -575,18 +1001,18 @@ export default function ExpenseTracker() {
             {budgetAnalysis.length > 0 ? (
               <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
                 {budgetAnalysis.map(budget => (
-                  <div key={budget.category} className="bg-white p-6 rounded-xl shadow-sm border border-gray-200">
-                    <h3 className="font-semibold text-lg mb-4">{budget.category}</h3>
+                  <div key={budget.category} className={`${darkMode ? 'bg-gray-800 border-gray-700' : 'bg-white border-gray-200'} p-6 rounded-xl shadow-sm border`}>
+                    <h3 className={`font-semibold text-lg mb-4 ${darkMode ? 'text-white' : ''}`}>{budget.category}</h3>
                     <div className="space-y-3">
                       <div className="flex justify-between text-sm">
-                        <span className="text-gray-600">Spent</span>
-                        <span className="font-semibold">${budget.spent.toFixed(2)}</span>
+                        <span className={darkMode ? 'text-gray-400' : 'text-gray-600'}>Spent</span>
+                        <span className={`font-semibold ${darkMode ? 'text-white' : ''}`}>${budget.spent.toFixed(2)}</span>
                       </div>
                       <div className="flex justify-between text-sm">
-                        <span className="text-gray-600">Budget</span>
-                        <span className="font-semibold">${budget.limit.toFixed(2)}</span>
+                        <span className={darkMode ? 'text-gray-400' : 'text-gray-600'}>Budget</span>
+                        <span className={`font-semibold ${darkMode ? 'text-white' : ''}`}>${budget.limit.toFixed(2)}</span>
                       </div>
-                      <div className="w-full bg-gray-200 rounded-full h-3">
+                      <div className={`w-full ${darkMode ? 'bg-gray-700' : 'bg-gray-200'} rounded-full h-3`}>
                         <div
                           className={`h-3 rounded-full transition-all ${
                             budget.percentage > 100 ? 'bg-red-600' : budget.percentage > 80 ? 'bg-yellow-600' : 'bg-green-600'
@@ -605,81 +1031,80 @@ export default function ExpenseTracker() {
                 ))}
               </div>
             ) : (
-              <div className="bg-white p-8 rounded-xl shadow-sm border border-gray-200 text-center text-gray-500">
+              <div className={`${darkMode ? 'bg-gray-800 border-gray-700 text-gray-500' : 'bg-white border-gray-200 text-gray-500'} p-8 rounded-xl shadow-sm border text-center`}>
                 <p>No budgets set for this month. Click "Set Budget" to create one!</p>
               </div>
             )}
           </div>
         )}
 
-        {/* Analytics Tab */}
         {activeTab === 'analytics' && (
           <div className="space-y-6">
-            <h2 className="text-2xl font-bold">Financial Analytics</h2>
+            <h2 className={`text-2xl font-bold ${darkMode ? 'text-white' : ''}`}>Financial Analytics</h2>
 
-            <div className="bg-white p-6 rounded-xl shadow-sm border border-gray-200">
-              <h3 className="text-lg font-semibold mb-4">Monthly Trend</h3>
+            <div className={`${darkMode ? 'bg-gray-800 border-gray-700' : 'bg-white border-gray-200'} p-6 rounded-xl shadow-sm border`}>
+              <h3 className={`text-lg font-semibold mb-4 ${darkMode ? 'text-white' : ''}`}>Monthly Trend</h3>
               {chartData.length > 0 ? (
                 <ResponsiveContainer width="100%" height={400}>
                   <LineChart data={chartData}>
-                    <CartesianGrid strokeDasharray="3 3" />
-                    <XAxis dataKey="month" />
-                    <YAxis />
-                    <Tooltip />
+                    <CartesianGrid strokeDasharray="3 3" stroke={darkMode ? '#374151' : '#e5e7eb'} />
+                    <XAxis dataKey="month" stroke={darkMode ? '#9ca3af' : '#6b7280'} />
+                    <YAxis stroke={darkMode ? '#9ca3af' : '#6b7280'} />
+                    <Tooltip contentStyle={{ backgroundColor: darkMode ? '#1f2937' : '#fff', border: darkMode ? '1px solid #374151' : '1px solid #e5e7eb' }} />
                     <Legend />
                     <Line type="monotone" dataKey="income" stroke="#10b981" strokeWidth={2} />
                     <Line type="monotone" dataKey="expense" stroke="#ef4444" strokeWidth={2} />
                   </LineChart>
                 </ResponsiveContainer>
               ) : (
-                <div className="h-[400px] flex items-center justify-center text-gray-500">
+                <div className={`h-[400px] flex items-center justify-center ${darkMode ? 'text-gray-500' : 'text-gray-500'}`}>
                   No data available for trend analysis
                 </div>
               )}
             </div>
 
             <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-              <div className="bg-white p-6 rounded-xl shadow-sm border border-gray-200">
-                <h3 className="text-lg font-semibold mb-4">Category Breakdown</h3>
+              <div className={`${darkMode ? 'bg-gray-800 border-gray-700' : 'bg-white border-gray-200'} p-6 rounded-xl shadow-sm border`}>
+                <h3 className={`text-lg font-semibold mb-4 ${darkMode ? 'text-white' : ''}`}>Category Breakdown</h3>
                 {categoryData.length > 0 ? (
                   <div className="space-y-3">
                     {categoryData.map((cat, idx) => (
                       <div key={cat.name} className="flex items-center justify-between">
                         <div className="flex items-center gap-3">
                           <div className="w-4 h-4 rounded" style={{ backgroundColor: COLORS[idx] }} />
-                          <span className="text-sm">{cat.name}</span>
+                          <span className={`text-sm ${darkMode ? 'text-gray-300' : ''}`}>{cat.name}</span>
                         </div>
-                        <span className="font-semibold">${cat.value.toFixed(2)}</span>
+                        <span className={`font-semibold ${darkMode ? 'text-white' : ''}`}>${cat.value.toFixed(2)}</span>
                       </div>
                     ))}
                   </div>
                 ) : (
-                  <p className="text-gray-500 text-center py-8">No expense data available</p>
+                  <p className={`${darkMode ? 'text-gray-500' : 'text-gray-500'} text-center py-8`}>No expense data available</p>
                 )}
               </div>
 
-              <div className="bg-white p-6 rounded-xl shadow-sm border border-gray-200">
-                <h3 className="text-lg font-semibold mb-4">Summary Statistics</h3>
+              <div className={`${darkMode ? 'bg-gray-800 border-gray-700' : 'bg-white border-gray-200'} p-6 rounded-xl shadow-sm border`}>
+                <h3 className={`text-lg font-semibold mb-4 ${darkMode ? 'text-white' : ''}`}>Summary Statistics</h3>
                 <div className="space-y-4">
                   <div className="flex justify-between">
-                    <span className="text-gray-600">Average Monthly Expense</span>
-                    <span className="font-semibold">
+                    <span className={darkMode ? 'text-gray-400' : 'text-gray-600'}>Average Monthly Expense</span>
+                    <span className={`font-semibold ${darkMode ? 'text-white' : ''}`}>
                       ${chartData.length > 0 ? (chartData.reduce((sum, d) => sum + d.expense, 0) / chartData.length).toFixed(2) : '0.00'}
                     </span>
                   </div>
                   <div className="flex justify-between">
-                    <span className="text-gray-600">Highest Expense Month</span>
-                    <span className="font-semibold">
+                    <span className={darkMode ? 'text-gray-400' : 'text-gray-600'}>Highest Expense Month</span>
+                    <span className={`font-semibold ${darkMode ? 'text-white' : ''}`}>
                       {chartData.length > 0 ? chartData.reduce((max, d) => d.expense > max.expense ? d : max, chartData[0]).month : 'N/A'}
                     </span>
                   </div>
                   <div className="flex justify-between">
-                    <span className="text-gray-600">Total Transactions</span>
-                    <span className="font-semibold">{expenses.length}</span>
+                    <span className={darkMode ? 'text-gray-400' : 'text-gray-600'}>Total Transactions</span>
+                    <span className={`font-semibold ${darkMode ? 'text-white' : ''}`}>{expenses.length}</span>
                   </div>
                   <div className="flex justify-between">
-                    <span className="text-gray-600">Savings Rate</span>
-                    <span className="font-semibold">
+                    <span className={darkMode ? 'text-gray-400' : 'text-gray-600'}>Savings Rate</span>
+                    <span className={`font-semibold ${darkMode ? 'text-white' : ''}`}>
                       {totalIncome > 0 ? ((balance / totalIncome) * 100).toFixed(1) : '0.0'}%
                     </span>
                   </div>
@@ -693,15 +1118,15 @@ export default function ExpenseTracker() {
       {/* Add/Edit Expense Modal */}
       {showAddExpense && (
         <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4 z-50">
-          <div className="bg-white rounded-xl shadow-2xl p-6 w-full max-w-md max-h-[90vh] overflow-y-auto">
+          <div className={`${darkMode ? 'bg-gray-800' : 'bg-white'} rounded-xl shadow-2xl p-6 w-full max-w-md max-h-[90vh] overflow-y-auto`}>
             <div className="flex justify-between items-center mb-6">
-              <h3 className="text-xl font-bold">{editingExpense ? 'Edit' : 'Add'} Transaction</h3>
+              <h3 className={`text-xl font-bold ${darkMode ? 'text-white' : ''}`}>{editingExpense ? 'Edit' : 'Add'} Transaction</h3>
               <button
                 onClick={() => {
                   setShowAddExpense(false);
                   setEditingExpense(null);
                 }}
-                className="text-gray-500 hover:text-gray-700"
+                className={darkMode ? 'text-gray-400 hover:text-gray-200' : 'text-gray-500 hover:text-gray-700'}
               >
                 <X className="w-6 h-6" />
               </button>
@@ -709,7 +1134,7 @@ export default function ExpenseTracker() {
 
             <form onSubmit={handleAddExpense} className="space-y-4">
               <div>
-                <label className="block text-sm font-medium text-gray-700 mb-2">Type</label>
+                <label className={`block text-sm font-medium ${darkMode ? 'text-gray-300' : 'text-gray-700'} mb-2`}>Type</label>
                 <div className="grid grid-cols-2 gap-3">
                   <button
                     type="button"
@@ -717,7 +1142,7 @@ export default function ExpenseTracker() {
                     className={`px-4 py-2 rounded-lg font-medium transition ${
                       expenseForm.type === 'expense'
                         ? 'bg-red-600 text-white'
-                        : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
+                        : darkMode ? 'bg-gray-700 text-gray-300 hover:bg-gray-600' : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
                     }`}
                   >
                     Expense
@@ -728,7 +1153,7 @@ export default function ExpenseTracker() {
                     className={`px-4 py-2 rounded-lg font-medium transition ${
                       expenseForm.type === 'income'
                         ? 'bg-green-600 text-white'
-                        : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
+                        : darkMode ? 'bg-gray-700 text-gray-300 hover:bg-gray-600' : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
                     }`}
                   >
                     Income
@@ -737,13 +1162,13 @@ export default function ExpenseTracker() {
               </div>
 
               <div>
-                <label className="block text-sm font-medium text-gray-700 mb-2">Amount</label>
+                <label className={`block text-sm font-medium ${darkMode ? 'text-gray-300' : 'text-gray-700'} mb-2`}>Amount</label>
                 <input
                   type="number"
                   step="0.01"
                   min="0"
                   placeholder="0.00"
-                  className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                  className={`w-full px-4 py-2 border ${darkMode ? 'border-gray-600 bg-gray-700 text-white' : 'border-gray-300'} rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent`}
                   value={expenseForm.amount}
                   onChange={(e) => setExpenseForm({ ...expenseForm, amount: e.target.value })}
                   required
@@ -751,9 +1176,9 @@ export default function ExpenseTracker() {
               </div>
 
               <div>
-                <label className="block text-sm font-medium text-gray-700 mb-2">Category</label>
+                <label className={`block text-sm font-medium ${darkMode ? 'text-gray-300' : 'text-gray-700'} mb-2`}>Category</label>
                 <select
-                  className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                  className={`w-full px-4 py-2 border ${darkMode ? 'border-gray-600 bg-gray-700 text-white' : 'border-gray-300'} rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent`}
                   value={expenseForm.category}
                   onChange={(e) => setExpenseForm({ ...expenseForm, category: e.target.value })}
                 >
@@ -764,11 +1189,11 @@ export default function ExpenseTracker() {
               </div>
 
               <div>
-                <label className="block text-sm font-medium text-gray-700 mb-2">Description</label>
+                <label className={`block text-sm font-medium ${darkMode ? 'text-gray-300' : 'text-gray-700'} mb-2`}>Description</label>
                 <input
                   type="text"
                   placeholder="e.g., Grocery shopping"
-                  className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                  className={`w-full px-4 py-2 border ${darkMode ? 'border-gray-600 bg-gray-700 text-white' : 'border-gray-300'} rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent`}
                   value={expenseForm.description}
                   onChange={(e) => setExpenseForm({ ...expenseForm, description: e.target.value })}
                   required
@@ -776,10 +1201,10 @@ export default function ExpenseTracker() {
               </div>
 
               <div>
-                <label className="block text-sm font-medium text-gray-700 mb-2">Date</label>
+                <label className={`block text-sm font-medium ${darkMode ? 'text-gray-300' : 'text-gray-700'} mb-2`}>Date</label>
                 <input
                   type="date"
-                  className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                  className={`w-full px-4 py-2 border ${darkMode ? 'border-gray-600 bg-gray-700 text-white' : 'border-gray-300'} rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent`}
                   value={expenseForm.date}
                   onChange={(e) => setExpenseForm({ ...expenseForm, date: e.target.value })}
                   required
@@ -787,9 +1212,9 @@ export default function ExpenseTracker() {
               </div>
 
               <div>
-                <label className="block text-sm font-medium text-gray-700 mb-2">Payment Method</label>
+                <label className={`block text-sm font-medium ${darkMode ? 'text-gray-300' : 'text-gray-700'} mb-2`}>Payment Method</label>
                 <select
-                  className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                  className={`w-full px-4 py-2 border ${darkMode ? 'border-gray-600 bg-gray-700 text-white' : 'border-gray-300'} rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent`}
                   value={expenseForm.paymentMethod}
                   onChange={(e) => setExpenseForm({ ...expenseForm, paymentMethod: e.target.value })}
                 >
@@ -814,15 +1239,166 @@ export default function ExpenseTracker() {
         </div>
       )}
 
+      {/* Add/Edit Recurring Expense Modal */}
+      {showAddRecurring && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4 z-50">
+          <div className={`${darkMode ? 'bg-gray-800' : 'bg-white'} rounded-xl shadow-2xl p-6 w-full max-w-md max-h-[90vh] overflow-y-auto`}>
+            <div className="flex justify-between items-center mb-6">
+              <h3 className={`text-xl font-bold ${darkMode ? 'text-white' : ''}`}>{editingRecurring ? 'Edit' : 'Add'} Recurring Expense</h3>
+              <button
+                onClick={() => {
+                  setShowAddRecurring(false);
+                  setEditingRecurring(null);
+                }}
+                className={darkMode ? 'text-gray-400 hover:text-gray-200' : 'text-gray-500 hover:text-gray-700'}
+              >
+                <X className="w-6 h-6" />
+              </button>
+            </div>
+
+            <form onSubmit={handleAddRecurring} className="space-y-4">
+              <div>
+                <label className={`block text-sm font-medium ${darkMode ? 'text-gray-300' : 'text-gray-700'} mb-2`}>Type</label>
+                <div className="grid grid-cols-2 gap-3">
+                  <button
+                    type="button"
+                    onClick={() => setRecurringForm({ ...recurringForm, type: 'expense' })}
+                    className={`px-4 py-2 rounded-lg font-medium transition ${
+                      recurringForm.type === 'expense'
+                        ? 'bg-red-600 text-white'
+                        : darkMode ? 'bg-gray-700 text-gray-300 hover:bg-gray-600' : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
+                    }`}
+                  >
+                    Expense
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setRecurringForm({ ...recurringForm, type: 'income' })}
+                    className={`px-4 py-2 rounded-lg font-medium transition ${
+                      recurringForm.type === 'income'
+                        ? 'bg-green-600 text-white'
+                        : darkMode ? 'bg-gray-700 text-gray-300 hover:bg-gray-600' : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
+                    }`}
+                  >
+                    Income
+                  </button>
+                </div>
+              </div>
+
+              <div>
+                <label className={`block text-sm font-medium ${darkMode ? 'text-gray-300' : 'text-gray-700'} mb-2`}>Amount</label>
+                <input
+                  type="number"
+                  step="0.01"
+                  min="0"
+                  placeholder="0.00"
+                  className={`w-full px-4 py-2 border ${darkMode ? 'border-gray-600 bg-gray-700 text-white' : 'border-gray-300'} rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent`}
+                  value={recurringForm.amount}
+                  onChange={(e) => setRecurringForm({ ...recurringForm, amount: e.target.value })}
+                  required
+                />
+              </div>
+
+              <div>
+                <label className={`block text-sm font-medium ${darkMode ? 'text-gray-300' : 'text-gray-700'} mb-2`}>Category</label>
+                <select
+                  className={`w-full px-4 py-2 border ${darkMode ? 'border-gray-600 bg-gray-700 text-white' : 'border-gray-300'} rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent`}
+                  value={recurringForm.category}
+                  onChange={(e) => setRecurringForm({ ...recurringForm, category: e.target.value })}
+                >
+                  {CATEGORIES.map(cat => (
+                    <option key={cat} value={cat}>{cat}</option>
+                  ))}
+                </select>
+              </div>
+
+              <div>
+                <label className={`block text-sm font-medium ${darkMode ? 'text-gray-300' : 'text-gray-700'} mb-2`}>Description</label>
+                <input
+                  type="text"
+                  placeholder="e.g., Netflix Subscription"
+                  className={`w-full px-4 py-2 border ${darkMode ? 'border-gray-600 bg-gray-700 text-white' : 'border-gray-300'} rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent`}
+                  value={recurringForm.description}
+                  onChange={(e) => setRecurringForm({ ...recurringForm, description: e.target.value })}
+                  required
+                />
+              </div>
+
+              <div>
+                <label className={`block text-sm font-medium ${darkMode ? 'text-gray-300' : 'text-gray-700'} mb-2`}>Frequency</label>
+                <select
+                  className={`w-full px-4 py-2 border ${darkMode ? 'border-gray-600 bg-gray-700 text-white' : 'border-gray-300'} rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent`}
+                  value={recurringForm.frequency}
+                  onChange={(e) => setRecurringForm({ ...recurringForm, frequency: e.target.value })}
+                >
+                  <option value="monthly">Monthly</option>
+                  <option value="weekly">Weekly</option>
+                  <option value="yearly">Yearly</option>
+                </select>
+              </div>
+
+              <div>
+                <label className={`block text-sm font-medium ${darkMode ? 'text-gray-300' : 'text-gray-700'} mb-2`}>Day of Month (1-31)</label>
+                <input
+                  type="number"
+                  min="1"
+                  max="31"
+                  placeholder="1"
+                  className={`w-full px-4 py-2 border ${darkMode ? 'border-gray-600 bg-gray-700 text-white' : 'border-gray-300'} rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent`}
+                  value={recurringForm.dayOfMonth}
+                  onChange={(e) => setRecurringForm({ ...recurringForm, dayOfMonth: e.target.value })}
+                  required
+                />
+              </div>
+
+              <div>
+                <label className={`block text-sm font-medium ${darkMode ? 'text-gray-300' : 'text-gray-700'} mb-2`}>Start Date</label>
+                <input
+                  type="date"
+                  className={`w-full px-4 py-2 border ${darkMode ? 'border-gray-600 bg-gray-700 text-white' : 'border-gray-300'} rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent`}
+                  value={recurringForm.startDate}
+                  onChange={(e) => setRecurringForm({ ...recurringForm, startDate: e.target.value })}
+                  required
+                />
+              </div>
+
+              <div>
+                <label className={`block text-sm font-medium ${darkMode ? 'text-gray-300' : 'text-gray-700'} mb-2`}>Payment Method</label>
+                <select
+                  className={`w-full px-4 py-2 border ${darkMode ? 'border-gray-600 bg-gray-700 text-white' : 'border-gray-300'} rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent`}
+                  value={recurringForm.paymentMethod}
+                  onChange={(e) => setRecurringForm({ ...recurringForm, paymentMethod: e.target.value })}
+                >
+                  <option value="Cash">Cash</option>
+                  <option value="Credit Card">Credit Card</option>
+                  <option value="Debit Card">Debit Card</option>
+                  <option value="Bank Transfer">Bank Transfer</option>
+                  <option value="Digital Wallet">Digital Wallet</option>
+                </select>
+              </div>
+
+              <button
+                type="submit"
+                disabled={loading}
+                className="w-full bg-blue-600 text-white py-3 rounded-lg font-semibold hover:bg-blue-700 transition flex items-center justify-center gap-2 disabled:opacity-50"
+              >
+                <Save className="w-4 h-4" />
+                {loading ? 'Saving...' : (editingRecurring ? 'Update' : 'Add')} Recurring
+              </button>
+            </form>
+          </div>
+        </div>
+      )}
+
       {/* Add Budget Modal */}
       {showAddBudget && (
         <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4 z-50">
-          <div className="bg-white rounded-xl shadow-2xl p-6 w-full max-w-md">
+          <div className={`${darkMode ? 'bg-gray-800' : 'bg-white'} rounded-xl shadow-2xl p-6 w-full max-w-md`}>
             <div className="flex justify-between items-center mb-6">
-              <h3 className="text-xl font-bold">Set Budget</h3>
+              <h3 className={`text-xl font-bold ${darkMode ? 'text-white' : ''}`}>Set Budget</h3>
               <button
                 onClick={() => setShowAddBudget(false)}
-                className="text-gray-500 hover:text-gray-700"
+                className={darkMode ? 'text-gray-400 hover:text-gray-200' : 'text-gray-500 hover:text-gray-700'}
               >
                 <X className="w-6 h-6" />
               </button>
@@ -830,9 +1406,9 @@ export default function ExpenseTracker() {
 
             <form onSubmit={handleAddBudget} className="space-y-4">
               <div>
-                <label className="block text-sm font-medium text-gray-700 mb-2">Category</label>
+                <label className={`block text-sm font-medium ${darkMode ? 'text-gray-300' : 'text-gray-700'} mb-2`}>Category</label>
                 <select
-                  className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                  className={`w-full px-4 py-2 border ${darkMode ? 'border-gray-600 bg-gray-700 text-white' : 'border-gray-300'} rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent`}
                   value={budgetForm.category}
                   onChange={(e) => setBudgetForm({ ...budgetForm, category: e.target.value })}
                 >
@@ -843,13 +1419,13 @@ export default function ExpenseTracker() {
               </div>
 
               <div>
-                <label className="block text-sm font-medium text-gray-700 mb-2">Budget Limit</label>
+                <label className={`block text-sm font-medium ${darkMode ? 'text-gray-300' : 'text-gray-700'} mb-2`}>Budget Limit</label>
                 <input
                   type="number"
                   step="0.01"
                   min="0"
                   placeholder="0.00"
-                  className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                  className={`w-full px-4 py-2 border ${darkMode ? 'border-gray-600 bg-gray-700 text-white' : 'border-gray-300'} rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent`}
                   value={budgetForm.limit}
                   onChange={(e) => setBudgetForm({ ...budgetForm, limit: e.target.value })}
                   required
@@ -857,10 +1433,10 @@ export default function ExpenseTracker() {
               </div>
 
               <div>
-                <label className="block text-sm font-medium text-gray-700 mb-2">Month</label>
+                <label className={`block text-sm font-medium ${darkMode ? 'text-gray-300' : 'text-gray-700'} mb-2`}>Month</label>
                 <input
                   type="month"
-                  className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                  className={`w-full px-4 py-2 border ${darkMode ? 'border-gray-600 bg-gray-700 text-white' : 'border-gray-300'} rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent`}
                   value={budgetForm.month}
                   onChange={(e) => setBudgetForm({ ...budgetForm, month: e.target.value })}
                   required
