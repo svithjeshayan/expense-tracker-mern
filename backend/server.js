@@ -20,6 +20,9 @@ app.use('/api/auth', require('./routes/auth'));
 app.use('/api/expenses', require('./routes/expenses'));
 app.use('/api/budgets', require('./routes/budgets'));
 app.use('/api/recurring', require('./routes/recurring'));
+app.use('/api/categories', require('./routes/categories'));
+app.use('/api/notifications', require('./routes/notifications'));
+app.use('/api/reports', require('./routes/reports'));
 
 // Health check
 app.get('/', (req, res) => {
@@ -32,5 +35,10 @@ app.listen(PORT, () => {
   console.log(`🚀 Server running on port ${PORT}`);
 });
 
+// Start background jobs
 const { startRecurringProcessor } = require('./jobs/processRecurring');
+const { startBudgetAlertJob, clearOldAlerts } = require('./jobs/budgetAlertJob');
+
 startRecurringProcessor();
+startBudgetAlertJob();
+clearOldAlerts();

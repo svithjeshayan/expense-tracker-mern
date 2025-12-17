@@ -21,10 +21,28 @@ const UserSchema = new mongoose.Schema({
     type: String,
     default: 'USD'
   },
+  notificationPreferences: {
+    budgetAlerts: {
+      type: Boolean,
+      default: true
+    },
+    weeklyReports: {
+      type: Boolean,
+      default: false
+    },
+    monthlyReports: {
+      type: Boolean,
+      default: false
+    },
+    budgetThreshold: {
+      type: Number,
+      default: 80 // Alert when 80% of budget is reached
+    }
+  },
   createdAt: {
     type: Date,
     default: Date.now
   }
 });
 
-module.exports = mongoose.model('User', UserSchema);
+module.exports = mongoose.models.User || mongoose.model('User', UserSchema);

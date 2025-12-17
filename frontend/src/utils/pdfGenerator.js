@@ -1,0 +1,183 @@
+import jsPDF from 'jspdf';
+import 'jspdf-autotable';
+import html2canvas from 'html2canvas';
+
+export const generatePDFReport = async (reportData, user) => {
+  const doc = new jsPDF();
+  const pageWidth = doc.internal.pageSize.getWidth();
+  const pageHeight = doc.internal.pageSize.getHeight();
+  
+  // Title
+  doc.setFontSize(24);
+  doc.setTextColor(59, 130, 246); // Blue
+  doc.text('Expense Tracker Report', pageWidth / 2, 20, { align: 'center' });
+  
+  // User info and date range
+  doc.setFontSize(10);
+  doc.setTextColor(100, 100, 100);
+  doc.text(`Generated for: ${user.name}`, 20, 30);
+  doc.text(`Date: ${new Date().toLocaleDateString()}`, 20, 35);
+  
+  if (reportData.dateRange) {
+    doc.text(`Period: ${reportData.dateRange.start} to ${reportData.dateRange.end}`, 20, 40);
+  }
+  
+  let yPos = 50;
+  
+  // Summary Section
+  doc.setFontSize(16);
+  doc.setTextColor(0, 0, 0);
+  doc.text('Financial Summary', 20, yPos);
+  yPos += 10;
+  
+  // Summary boxes
+  const summaryData = [
+    ['Total Income', `$${reportData.summary.totalIncome.toFixed(2)}`, '#10b981'],
+    ['Total Expenses', `$${reportData.summary.totalExpense.toFixed(2)}`, '#ef4444'],
+    ['Net Balance', `$${reportData.summary.balance.toFixed(2)}`, reportData.summary.balance >= 0 ? '#3b82f6' : '#ef4444'],
+    ['Transactions', reportData.summary.transactionCount.toString(), '#6b7280']
+  ];
+  
+  summaryData.forEach((item, index) => {
+    const xPos = 20 + (index % 2) * 90;
+    const yOffset = Math.floor(index / 2) * 25;
+    
+    doc.setFillColor(item[2]);
+    doc.rect(xPos, yPos + yOffset, 80, 20, 'F');
+    doc.setTextColor(255, 255, 255);
+    doc.setFontSize(10);
+    doc.text(item[0], xPos + 5, yPos + yOffset + 8);
+    doc.setFontSize(14);
+    doc.text(item[1], xPos + 5, yPos + yOffset + 16);
+  });
+  
+  yPos += 60;
+  
+  // Category Breakdown
+  if (reportData.categoryData && reportData.categoryData.length > 0) {
+    doc.setFontSize(16);
+    doc.setTextColor(0, 0, 0);
+    doc.text('Expense Breakdown by Category', 20, yPos);
+    yPos += 5;
+    
+    const categoryTableData = reportData.categoryData.map(cat => [
+      cat.category,
+      `$${cat.amount.toFixed(2)}`,
+      `${((cat.amount / reportData.summary.totalExpense) * 100).toFixed(1)}%`
+    ]);
+    
+    doc.autoTable({
+      startY: yPos,
+      head: [['Category', 'Amount', 'Percentage']],
+      body: categoryTableData,
+      theme: 'grid',
+      headStyles: { fillColor: [59, 130, 246] },
+      styles: { fontSize: 10 },
+      margin: { left: 20, right: 20 }
+    });
+    
+    yPos = doc.lastAutoTable.finalY + 15;
+  }
+  
+  // Monthly Trends
+  if (reportData.chartData && reportData.chartData.length > 0 && yPos < pageHeight - 60) {
+    doc.setFontSize(16);
+    doc.setTextColor(0, 0, 0);
+    doc.text('Monthly Trends', 20, yPos);
+    yPos += 5;
+    
+    const monthlyTableData = reportData.chartData.map(month => [
+      month.month,
+      `$${month.income.toFixed(2)}`,
+      `$${month.expense.toFixed(2)}`,
+      `$${(month.income - month.expense).toFixed(2)}`
+    ]);
+    
+    doc.autoTable({
+      startY: yPos,
+      head: [['Month', 'Income', 'Expenses', 'Net']],
+      body: monthlyTableData,
+      theme: 'grid',
+      headStyles: { fillColor: [59, 130, 246] },
+      styles: { fontSize: 10 },
+      margin: { left: 20, right: 20 }
+    });
+    
+    yPos = doc.lastAutoTable.finalY + 15;
+  }
+  
+  // New page for transactions if needed
+  if (reportData.transactions && reportData.transactions.length > 0) {
+    doc.addPage();
+    yPos = 20;
+    
+    doc.setFontSize(16);
+    doc.setTextColor(0, 0, 0);
+    doc.text('Transaction History', 20, yPos);
+    yPos += 5;
+    
+    const transactionTableData = reportData.transactions.slice(0, 50).map(t => [
+      new Date(t.date).toLocaleDateString(),
+      t.description,
+      t.category,
+      t.type === 'income' ? `+$${t.amount.toFixed(2)}` : `-$${t.amount.toFixed(2)}`
+    ]);
+    
+    doc.autoTable({
+      startY: yPos,
+      head: [['Date', 'Description', 'Category', 'Amount']],
+      body: transactionTableData,
+      theme: 'striped',
+      headStyles: { fillColor: [59, 130, 246] },
+      styles: { fontSize: 9 },
+      margin: { left: 20, right: 20 },
+      columnStyles: {
+        3: { 
+          cellWidth: 30,
+          halign: 'right',
+          textColor: (rowIndex) => {
+            const transaction = reportData.transactions[rowIndex];
+            return transaction?.type === 'income' ? [16, 185, 129] : [239, 68, 68];
+          }
+        }
+      }
+    });
+    
+    if (reportData.transactions.length > 50) {
+      doc.setFontSize(10);
+      doc.setTextColor(100, 100, 100);
+      doc.text(`Showing first 50 of ${reportData.transactions.length} transactions`, 20, doc.lastAutoTable.finalY + 10);
+    }
+  }
+  
+  // Footer on all pages
+  const totalPages = doc.internal.getNumberOfPages();
+  for (let i = 1; i <= totalPages; i++) {
+    doc.setPage(i);
+    doc.setFontSize(8);
+    doc.setTextColor(150, 150, 150);
+    doc.text(
+      `Page ${i} of ${totalPages} | Generated by Expense Tracker`,
+      pageWidth / 2,
+      pageHeight - 10,
+      { align: 'center' }
+    );
+  }
+  
+  // Save the PDF
+  const fileName = `expense-report-${new Date().toISOString().split('T')[0]}.pdf`;
+  doc.save(fileName);
+};
+
+export const generateChartImage = async (chartElementId) => {
+  const chartElement = document.getElementById(chartElementId);
+  if (!chartElement) return null;
+  
+  try {
+    const canvas = await html2canvas(chartElement);
+    return canvas.toDataURL('image/png');
+  } catch (error) {
+    console.error('Error generating chart image:', error);
+    return null;
+  }
+};

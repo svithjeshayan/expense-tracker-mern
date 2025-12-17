@@ -1,9 +1,11 @@
 import React, { useState, useEffect } from 'react';
-import { PlusCircle, TrendingUp, TrendingDown, Wallet, Download, Edit2, Trash2, Save, X, DollarSign, LogOut, User, Moon, Sun, Search, Filter, ChevronLeft, ChevronRight, RefreshCw, Calendar } from 'lucide-react';
-import { LineChart, Line, BarChart, Bar, PieChart as RechartsPie, Pie, Cell, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer } from 'recharts';
+import { PlusCircle, TrendingUp, TrendingDown, Wallet, Download, Edit2, Trash2, Save, X, DollarSign, LogOut, User, Moon, Sun, Search, Filter, ChevronLeft, ChevronRight, RefreshCw, Calendar, FileText, Bell, Tag, Plus, BarChart3 } from 'lucide-react';
+import { LineChart, Line, BarChart, Bar, PieChart as RechartsPie, Pie, Cell, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer, AreaChart, Area } from 'recharts';
 import api from './api/axios';
+import { generatePDFReport } from './utils/pdfGenerator';
 
-const CATEGORIES = [
+// Default categories - will be replaced by user's custom categories
+const DEFAULT_EXPENSE_CATEGORIES = [
   'Food & Dining',
   'Transportation',
   'Shopping',
@@ -15,6 +17,15 @@ const CATEGORIES = [
   'Others'
 ];
 
+const DEFAULT_INCOME_CATEGORIES = [
+  'Salary',
+  'Freelance',
+  'Investment',
+  'Business',
+  'Gift',
+  'Others'
+];
+
 const COLORS = ['#3b82f6', '#10b981', '#f59e0b', '#ef4444', '#8b5cf6', '#ec4899', '#14b8a6', '#f97316', '#6366f1'];
 
 export default function ExpenseTracker() {
@@ -23,17 +34,30 @@ export default function ExpenseTracker() {
   const [authForm, setAuthForm] = useState({ name: '', email: '', password: '' });
   const [loading, setLoading] = useState(false);
   const [darkMode, setDarkMode] = useState(false);
+  const [systemTheme, setSystemTheme] = useState('light');
   
   const [activeTab, setActiveTab] = useState('dashboard');
   const [expenses, setExpenses] = useState([]);
   const [budgets, setBudgets] = useState([]);
   const [recurringExpenses, setRecurringExpenses] = useState([]);
+  const [categories, setCategories] = useState([]);
+  const [trendData, setTrendData] = useState(null);
+  const [notificationPrefs, setNotificationPrefs] = useState({
+    budgetAlerts: true,
+    weeklyReports: false,
+    monthlyReports: false,
+    budgetThreshold: 80
+  });
+  
   const [showAddExpense, setShowAddExpense] = useState(false);
   const [showAddBudget, setShowAddBudget] = useState(false);
   const [showAddRecurring, setShowAddRecurring] = useState(false);
   const [showFilters, setShowFilters] = useState(false);
+  const [showAddCategory, setShowAddCategory] = useState(false);
+  const [showNotificationSettings, setShowNotificationSettings] = useState(false);
   const [editingExpense, setEditingExpense] = useState(null);
   const [editingRecurring, setEditingRecurring] = useState(null);
+  const [editingCategory, setEditingCategory] = useState(null);
   
   // Pagination
   const [currentPage, setCurrentPage] = useState(1);
@@ -53,7 +77,7 @@ export default function ExpenseTracker() {
   
   const [expenseForm, setExpenseForm] = useState({
     amount: '',
-    category: 'Food & Dining',
+    category: '',
     description: '',
     date: new Date().toISOString().split('T')[0],
     paymentMethod: 'Cash',
@@ -62,7 +86,7 @@ export default function ExpenseTracker() {
 
   const [recurringForm, setRecurringForm] = useState({
     amount: '',
-    category: 'Food & Dining',
+    category: '',
     description: '',
     paymentMethod: 'Cash',
     type: 'expense',
@@ -72,18 +96,63 @@ export default function ExpenseTracker() {
   });
 
   const [budgetForm, setBudgetForm] = useState({
-    category: 'Food & Dining',
+    category: '',
     limit: '',
     month: new Date().toISOString().slice(0, 7)
   });
 
+  const [categoryForm, setCategoryForm] = useState({
+    name: '',
+    type: 'expense',
+    icon: '📁',
+    color: '#3b82f6'
+  });
+
   useEffect(() => {
+    // Detect system theme preference
+    const mediaQuery = window.matchMedia('(prefers-color-scheme: dark)');
+    const handleThemeChange = (e) => {
+      const newTheme = e.matches ? 'dark' : 'light';
+      setSystemTheme(newTheme);
+      
+      // Only apply if user hasn't manually set a preference
+      const savedTheme = localStorage.getItem('theme');
+      if (!savedTheme) {
+        setDarkMode(e.matches);
+        if (e.matches) {
+          document.documentElement.classList.add('dark');
+        } else {
+          document.documentElement.classList.remove('dark');
+        }
+      }
+    };
+
+    // Set initial theme
     const savedTheme = localStorage.getItem('theme');
     if (savedTheme === 'dark') {
       setDarkMode(true);
       document.documentElement.classList.add('dark');
+    } else if (savedTheme === 'light') {
+      setDarkMode(false);
+      document.documentElement.classList.remove('dark');
+    } else {
+      // Use system preference
+      const prefersDark = mediaQuery.matches;
+      setSystemTheme(prefersDark ? 'dark' : 'light');
+      setDarkMode(prefersDark);
+      if (prefersDark) {
+        document.documentElement.classList.add('dark');
+      }
     }
+
+    // Listen for system theme changes
+    mediaQuery.addEventListener('change', handleThemeChange);
+    
     checkAuth();
+
+    return () => {
+      mediaQuery.removeEventListener('change', handleThemeChange);
+    };
   }, []);
 
   const toggleDarkMode = () => {
@@ -103,7 +172,7 @@ export default function ExpenseTracker() {
       try {
         const response = await api.get('/auth/me');
         setCurrentUser(response.data);
-        loadUserData();
+        await loadUserData();
       } catch (error) {
         console.error('Auth check failed:', error);
         localStorage.removeItem('token');
@@ -113,14 +182,40 @@ export default function ExpenseTracker() {
 
   const loadUserData = async () => {
     try {
-      const [expensesRes, budgetsRes, recurringRes] = await Promise.all([
+      const [expensesRes, budgetsRes, recurringRes, categoriesRes, notifPrefsRes] = await Promise.all([
         api.get('/expenses'),
         api.get('/budgets'),
-        api.get('/recurring').catch(() => ({ data: [] }))
+        api.get('/recurring').catch(() => ({ data: [] })),
+        api.get('/categories').catch(() => ({ data: [] })),
+        api.get('/notifications/preferences').catch(() => ({ data: { budgetAlerts: true, weeklyReports: false, monthlyReports: false, budgetThreshold: 80 } }))
       ]);
+      
       setExpenses(expensesRes.data);
       setBudgets(budgetsRes.data);
       setRecurringExpenses(recurringRes.data);
+      setCategories(categoriesRes.data);
+      setNotificationPrefs(notifPrefsRes.data);
+      
+      // Initialize categories if none exist
+      if (categoriesRes.data.length === 0) {
+        try {
+          await api.post('/categories/initialize');
+          const newCategoriesRes = await api.get('/categories');
+          setCategories(newCategoriesRes.data);
+        } catch (error) {
+          console.error('Error initializing categories:', error);
+        }
+      }
+
+      // Set default category for forms
+      if (categoriesRes.data.length > 0) {
+        const firstExpenseCat = categoriesRes.data.find(c => c.type === 'expense');
+        const firstIncomeCat = categoriesRes.data.find(c => c.type === 'income');
+        
+        setExpenseForm(prev => ({ ...prev, category: firstExpenseCat?.name || '' }));
+        setRecurringForm(prev => ({ ...prev, category: firstExpenseCat?.name || '' }));
+        setBudgetForm(prev => ({ ...prev, category: firstExpenseCat?.name || '' }));
+      }
     } catch (error) {
       console.error('Error loading data:', error);
     }
@@ -379,14 +474,118 @@ export default function ExpenseTracker() {
     a.click();
   };
 
+  // PDF Export
+  const handleExportPDF = async () => {
+    try {
+      const reportRes = await api.get('/reports/summary', {
+        params: {
+          startDate: filters.startDate || undefined,
+          endDate: filters.endDate || undefined
+        }
+      });
+      
+      const reportData = {
+        ...reportRes.data,
+        dateRange: filters.startDate && filters.endDate ? {
+          start: filters.startDate,
+          end: filters.endDate
+        } : null
+      };
+      
+      await generatePDFReport(reportData, currentUser);
+    } catch (error) {
+      console.error('Error generating PDF:', error);
+      alert('Failed to generate PDF report');
+    }
+  };
+
+  // Load trend data
+  const loadTrendData = async () => {
+    try {
+      const response = await api.get('/reports/trends');
+      setTrendData(response.data);
+    } catch (error) {
+      console.error('Error loading trend data:', error);
+    }
+  };
+
+  // Category management
+  const handleAddCategory = async (e) => {
+    e.preventDefault();
+    setLoading(true);
+    try {
+      if (editingCategory) {
+        await api.put(`/categories/${editingCategory._id}`, categoryForm);
+      } else {
+        await api.post('/categories', categoryForm);
+      }
+      
+      const categoriesRes = await api.get('/categories');
+      setCategories(categoriesRes.data);
+      setShowAddCategory(false);
+      setEditingCategory(null);
+      setCategoryForm({ name: '', type: 'expense', icon: '📁', color: '#3b82f6' });
+    } catch (error) {
+      alert(error.response?.data?.message || 'Error saving category');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleDeleteCategory = async (id) => {
+    if (window.confirm('Are you sure you want to delete this category?')) {
+      try {
+        await api.delete(`/categories/${id}`);
+        const categoriesRes = await api.get('/categories');
+        setCategories(categoriesRes.data);
+      } catch (error) {
+        alert(error.response?.data?.message || 'Error deleting category');
+      }
+    }
+  };
+
+  const handleEditCategory = (category) => {
+    setEditingCategory(category);
+    setCategoryForm({
+      name: category.name,
+      type: category.type,
+      icon: category.icon,
+      color: category.color
+    });
+    setShowAddCategory(true);
+  };
+
+  // Update notification preferences
+  const handleUpdateNotifications = async (prefs) => {
+    try {
+      await api.post('/notifications/preferences', prefs);
+      setNotificationPrefs(prefs);
+      alert('Notification preferences updated');
+    } catch (error) {
+      alert('Error updating preferences');
+    }
+  };
+
+  // Get categories by type
+  const getExpenseCategories = () => {
+    return categories.filter(c => c.type === 'expense').map(c => c.name);
+  };
+
+  const getIncomeCategories = () => {
+    return categories.filter(c => c.type === 'income').map(c => c.name);
+  };
+
   // Analytics calculations
   const totalIncome = expenses.filter(e => e.type === 'income').reduce((sum, e) => sum + e.amount, 0);
   const totalExpense = expenses.filter(e => e.type === 'expense').reduce((sum, e) => sum + e.amount, 0);
   const balance = totalIncome - totalExpense;
 
-  const categoryData = CATEGORIES.map(cat => ({
-    name: cat,
-    value: expenses.filter(e => e.category === cat && e.type === 'expense').reduce((sum, e) => sum + e.amount, 0)
+  // Use dynamic categories for category data
+  const expenseCategories = categories.filter(c => c.type === 'expense');
+  const categoryData = expenseCategories.map(cat => ({
+    name: cat.name,
+    value: expenses.filter(e => e.category === cat.name && e.type === 'expense').reduce((sum, e) => sum + e.amount, 0),
+    color: cat.color
   })).filter(d => d.value > 0);
 
   const monthlyData = expenses.reduce((acc, e) => {
@@ -510,12 +709,17 @@ export default function ExpenseTracker() {
       {/* Navigation */}
       <nav className={`${darkMode ? 'bg-gray-800 border-gray-700' : 'bg-white'} shadow-sm border-b`}>
         <div className="max-w-7xl mx-auto px-4">
-          <div className="flex gap-2">
-            {['dashboard', 'expenses', 'recurring', 'budgets', 'analytics'].map(tab => (
+          <div className="flex gap-2 overflow-x-auto">
+            {['dashboard', 'expenses', 'recurring', 'budgets', 'analytics', 'trends', 'categories'].map(tab => (
               <button
                 key={tab}
-                onClick={() => setActiveTab(tab)}
-                className={`px-6 py-3 font-medium capitalize transition ${
+                onClick={() => {
+                  setActiveTab(tab);
+                  if (tab === 'trends' && !trendData) {
+                    loadTrendData();
+                  }
+                }}
+                className={`px-6 py-3 font-medium capitalize transition whitespace-nowrap ${
                   activeTab === tab
                     ? `${darkMode ? 'text-blue-400' : 'text-blue-600'} border-b-2 ${darkMode ? 'border-blue-400' : 'border-blue-600'}`
                     : `${darkMode ? 'text-gray-400 hover:text-gray-200' : 'text-gray-600 hover:text-gray-800'}`
@@ -686,7 +890,16 @@ export default function ExpenseTracker() {
                   className="flex items-center gap-2 px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 transition disabled:opacity-50 disabled:cursor-not-allowed"
                 >
                   <Download className="w-4 h-4" />
-                  Export
+                  CSV
+                </button>
+
+                <button
+                  onClick={handleExportPDF}
+                  disabled={expenses.length === 0}
+                  className="flex items-center gap-2 px-4 py-2 bg-red-600 text-white rounded-lg hover:bg-red-700 transition disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  <FileText className="w-4 h-4" />
+                  PDF
                 </button>
                 
                 <button
@@ -715,8 +928,8 @@ export default function ExpenseTracker() {
                       onChange={(e) => setFilters({ ...filters, category: e.target.value })}
                     >
                       <option value="">All Categories</option>
-                      {CATEGORIES.map(cat => (
-                        <option key={cat} value={cat}>{cat}</option>
+                      {categories.map(cat => (
+                        <option key={cat._id} value={cat.name}>{cat.name}</option>
                       ))}
                     </select>
                   </div>
@@ -1113,6 +1326,212 @@ export default function ExpenseTracker() {
             </div>
           </div>
         )}
+
+        {activeTab === 'trends' && (
+          <div className="space-y-6">
+            <div className="flex justify-between items-center">
+              <h2 className={`text-2xl font-bold ${darkMode ? 'text-white' : ''}`}>Trend Analysis</h2>
+              <button
+                onClick={loadTrendData}
+                className="flex items-center gap-2 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition"
+              >
+                <RefreshCw className="w-4 h-4" />
+                Refresh
+              </button>
+            </div>
+
+            {trendData ? (
+              <>
+                {/* Insights Cards */}
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+                  <div className={`${darkMode ? 'bg-gray-800 border-gray-700' : 'bg-white border-gray-200'} p-6 rounded-xl shadow-sm border`}>
+                    <div className="flex items-center gap-3 mb-2">
+                      <BarChart3 className="w-8 h-8 text-blue-600" />
+                      <h3 className={`font-semibold ${darkMode ? 'text-white' : ''}`}>Avg Monthly Expense</h3>
+                    </div>
+                    <p className="text-3xl font-bold text-blue-600">${trendData.insights.avgMonthlyExpense.toFixed(2)}</p>
+                  </div>
+
+                  <div className={`${darkMode ? 'bg-gray-800 border-gray-700' : 'bg-white border-gray-200'} p-6 rounded-xl shadow-sm border`}>
+                    <div className="flex items-center gap-3 mb-2">
+                      <TrendingUp className="w-8 h-8 text-green-600" />
+                      <h3 className={`font-semibold ${darkMode ? 'text-white' : ''}`}>Avg Monthly Income</h3>
+                    </div>
+                    <p className="text-3xl font-bold text-green-600">${trendData.insights.avgMonthlyIncome.toFixed(2)}</p>
+                  </div>
+
+                  {trendData.insights.prediction && (
+                    <div className={`${darkMode ? 'bg-gray-800 border-gray-700' : 'bg-white border-gray-200'} p-6 rounded-xl shadow-sm border`}>
+                      <div className="flex items-center gap-3 mb-2">
+                        <Calendar className="w-8 h-8 text-purple-600" />
+                        <h3 className={`font-semibold ${darkMode ? 'text-white' : ''}`}>Next Month Estimate</h3>
+                      </div>
+                      <p className="text-3xl font-bold text-purple-600">${trendData.insights.prediction.estimatedExpense.toFixed(2)}</p>
+                      <p className={`text-sm ${darkMode ? 'text-gray-400' : 'text-gray-600'} mt-1`}>Confidence: {trendData.insights.prediction.confidence}</p>
+                    </div>
+                  )}
+                </div>
+
+                {/* Monthly Trends Chart */}
+                <div className={`${darkMode ? 'bg-gray-800 border-gray-700' : 'bg-white border-gray-200'} p-6 rounded-xl shadow-sm border`}>
+                  <h3 className={`text-lg font-semibold mb-4 ${darkMode ? 'text-white' : ''}`}>Monthly Trends with Changes</h3>
+                  <ResponsiveContainer width="100%" height={400}>
+                    <AreaChart data={trendData.monthlyTrends}>
+                      <CartesianGrid strokeDasharray="3 3" stroke={darkMode ? '#374151' : '#e5e7eb'} />
+                      <XAxis dataKey="month" stroke={darkMode ? '#9ca3af' : '#6b7280'} />
+                      <YAxis stroke={darkMode ? '#9ca3af' : '#6b7280'} />
+                      <Tooltip contentStyle={{ backgroundColor: darkMode ? '#1f2937' : '#fff', border: darkMode ? '1px solid #374151' : '1px solid #e5e7eb' }} />
+                      <Legend />
+                      <Area type="monotone" dataKey="income" stackId="1" stroke="#10b981" fill="#10b981" fillOpacity={0.6} />
+                      <Area type="monotone" dataKey="expense" stackId="2" stroke="#ef4444" fill="#ef4444" fillOpacity={0.6} />
+                    </AreaChart>
+                  </ResponsiveContainer>
+                </div>
+
+                {/* Month-over-Month Changes */}
+                <div className={`${darkMode ? 'bg-gray-800 border-gray-700' : 'bg-white border-gray-200'} p-6 rounded-xl shadow-sm border`}>
+                  <h3 className={`text-lg font-semibold mb-4 ${darkMode ? 'text-white' : ''}`}>Month-over-Month Changes</h3>
+                  <div className="overflow-x-auto">
+                    <table className="w-full">
+                      <thead className={`${darkMode ? 'bg-gray-700' : 'bg-gray-50'} border-b ${darkMode ? 'border-gray-600' : ''}`}>
+                        <tr>
+                          <th className={`px-6 py-3 text-left text-sm font-semibold ${darkMode ? 'text-gray-300' : 'text-gray-700'}`}>Month</th>
+                          <th className={`px-6 py-3 text-left text-sm font-semibold ${darkMode ? 'text-gray-300' : 'text-gray-700'}`}>Income</th>
+                          <th className={`px-6 py-3 text-left text-sm font-semibold ${darkMode ? 'text-gray-300' : 'text-gray-700'}`}>Expense</th>
+                          <th className={`px-6 py-3 text-left text-sm font-semibold ${darkMode ? 'text-gray-300' : 'text-gray-700'}`}>Income Change</th>
+                          <th className={`px-6 py-3 text-left text-sm font-semibold ${darkMode ? 'text-gray-300' : 'text-gray-700'}`}>Expense Change</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y">
+                        {trendData.monthlyTrends.slice(-6).map(trend => (
+                          <tr key={trend.month} className={`${darkMode ? 'hover:bg-gray-700' : 'hover:bg-gray-50'}`}>
+                            <td className={`px-6 py-4 text-sm ${darkMode ? 'text-gray-300' : ''}`}>{trend.month}</td>
+                            <td className={`px-6 py-4 text-sm font-medium text-green-600`}>${trend.income.toFixed(2)}</td>
+                            <td className={`px-6 py-4 text-sm font-medium text-red-600`}>${trend.expense.toFixed(2)}</td>
+                            <td className={`px-6 py-4 text-sm font-medium ${trend.incomeChange >= 0 ? 'text-green-600' : 'text-red-600'}`}>
+                              {trend.incomeChange >= 0 ? '+' : ''}{trend.incomeChange}%
+                            </td>
+                            <td className={`px-6 py-4 text-sm font-medium ${trend.expenseChange <= 0 ? 'text-green-600' : 'text-red-600'}`}>
+                              {trend.expenseChange >= 0 ? '+' : ''}{trend.expenseChange}%
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              </>
+            ) : (
+              <div className={`${darkMode ? 'bg-gray-800 border-gray-700 text-gray-500' : 'bg-white border-gray-200 text-gray-500'} p-8 rounded-xl shadow-sm border text-center`}>
+                <BarChart3 className="w-16 h-16 mx-auto mb-4 opacity-50" />
+                <p>Loading trend data...</p>
+              </div>
+            )}
+          </div>
+        )}
+
+        {activeTab === 'categories' && (
+          <div className="space-y-6">
+            <div className="flex justify-between items-center">
+              <h2 className={`text-2xl font-bold ${darkMode ? 'text-white' : ''}`}>Manage Categories</h2>
+              <button
+                onClick={() => {
+                  setShowAddCategory(true);
+                  setEditingCategory(null);
+                  setCategoryForm({ name: '', type: 'expense', icon: '📁', color: '#3b82f6' });
+                }}
+                className="flex items-center gap-2 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition"
+              >
+                <Plus className="w-4 h-4" />
+                Add Category
+              </button>
+            </div>
+
+            {/* Expense Categories */}
+            <div>
+              <h3 className={`text-lg font-semibold mb-4 ${darkMode ? 'text-white' : ''}`}>Expense Categories</h3>
+              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                {categories.filter(c => c.type === 'expense').map(category => (
+                  <div key={category._id} className={`${darkMode ? 'bg-gray-800 border-gray-700' : 'bg-white border-gray-200'} p-4 rounded-xl shadow-sm border`}>
+                    <div className="flex items-center justify-between">
+                      <div className="flex items-center gap-3">
+                        <div className="text-3xl">{category.icon}</div>
+                        <div>
+                          <p className={`font-semibold ${darkMode ? 'text-white' : ''}`}>{category.name}</p>
+                          <div className="flex items-center gap-2 mt-1">
+                            <div className="w-4 h-4 rounded" style={{ backgroundColor: category.color }}></div>
+                            <span className={`text-xs ${darkMode ? 'text-gray-400' : 'text-gray-600'}`}>{category.color}</span>
+                          </div>
+                        </div>
+                      </div>
+                      <div className="flex gap-2">
+                        <button
+                          onClick={() => handleEditCategory(category)}
+                          className="p-2 text-blue-600 hover:bg-blue-50 rounded"
+                          disabled={category.isDefault}
+                        >
+                          <Edit2 className="w-4 h-4" />
+                        </button>
+                        <button
+                          onClick={() => handleDeleteCategory(category._id)}
+                          className="p-2 text-red-600 hover:bg-red-50 rounded"
+                          disabled={category.isDefault}
+                        >
+                          <Trash2 className="w-4 h-4" />
+                        </button>
+                      </div>
+                    </div>
+                    {category.isDefault && (
+                      <span className={`text-xs ${darkMode ? 'text-gray-500' : 'text-gray-500'} mt-2 block`}>Default category</span>
+                    )}
+                  </div>
+                ))}
+              </div>
+            </div>
+
+            {/* Income Categories */}
+            <div>
+              <h3 className={`text-lg font-semibold mb-4 ${darkMode ? 'text-white' : ''}`}>Income Categories</h3>
+              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                {categories.filter(c => c.type === 'income').map(category => (
+                  <div key={category._id} className={`${darkMode ? 'bg-gray-800 border-gray-700' : 'bg-white border-gray-200'} p-4 rounded-xl shadow-sm border`}>
+                    <div className="flex items-center justify-between">
+                      <div className="flex items-center gap-3">
+                        <div className="text-3xl">{category.icon}</div>
+                        <div>
+                          <p className={`font-semibold ${darkMode ? 'text-white' : ''}`}>{category.name}</p>
+                          <div className="flex items-center gap-2 mt-1">
+                            <div className="w-4 h-4 rounded" style={{ backgroundColor: category.color }}></div>
+                            <span className={`text-xs ${darkMode ? 'text-gray-400' : 'text-gray-600'}`}>{category.color}</span>
+                          </div>
+                        </div>
+                      </div>
+                      <div className="flex gap-2">
+                        <button
+                          onClick={() => handleEditCategory(category)}
+                          className="p-2 text-blue-600 hover:bg-blue-50 rounded"
+                          disabled={category.isDefault}
+                        >
+                          <Edit2 className="w-4 h-4" />
+                        </button>
+                        <button
+                          onClick={() => handleDeleteCategory(category._id)}
+                          className="p-2 text-red-600 hover:bg-red-50 rounded"
+                          disabled={category.isDefault}
+                        >
+                          <Trash2 className="w-4 h-4" />
+                        </button>
+                      </div>
+                    </div>
+                    {category.isDefault && (
+                      <span className={`text-xs ${darkMode ? 'text-gray-500' : 'text-gray-500'} mt-2 block`}>Default category</span>
+                    )}
+                  </div>
+                ))}
+              </div>
+            </div>
+          </div>
+        )}
       </main>
 
       {/* Add/Edit Expense Modal */}
@@ -1182,7 +1601,7 @@ export default function ExpenseTracker() {
                   value={expenseForm.category}
                   onChange={(e) => setExpenseForm({ ...expenseForm, category: e.target.value })}
                 >
-                  {CATEGORIES.map(cat => (
+                  {(expenseForm.type === 'expense' ? getExpenseCategories() : getIncomeCategories()).map(cat => (
                     <option key={cat} value={cat}>{cat}</option>
                   ))}
                 </select>
@@ -1306,7 +1725,7 @@ export default function ExpenseTracker() {
                   value={recurringForm.category}
                   onChange={(e) => setRecurringForm({ ...recurringForm, category: e.target.value })}
                 >
-                  {CATEGORIES.map(cat => (
+                  {(recurringForm.type === 'expense' ? getExpenseCategories() : getIncomeCategories()).map(cat => (
                     <option key={cat} value={cat}>{cat}</option>
                   ))}
                 </select>
@@ -1412,7 +1831,7 @@ export default function ExpenseTracker() {
                   value={budgetForm.category}
                   onChange={(e) => setBudgetForm({ ...budgetForm, category: e.target.value })}
                 >
-                  {CATEGORIES.map(cat => (
+                  {getExpenseCategories().map(cat => (
                     <option key={cat} value={cat}>{cat}</option>
                   ))}
                 </select>
@@ -1450,6 +1869,100 @@ export default function ExpenseTracker() {
               >
                 <Save className="w-4 h-4" />
                 {loading ? 'Saving...' : 'Set Budget'}
+              </button>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {showAddCategory && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4 z-50">
+          <div className={`${darkMode ? 'bg-gray-800' : 'bg-white'} rounded-xl shadow-2xl p-6 w-full max-w-md`}>
+            <div className="flex justify-between items-center mb-6">
+              <h3 className={`text-xl font-bold ${darkMode ? 'text-white' : ''}`}>{editingCategory ? 'Edit' : 'Add'} Category</h3>
+              <button
+                onClick={() => {
+                  setShowAddCategory(false);
+                  setEditingCategory(null);
+                }}
+                className={darkMode ? 'text-gray-400 hover:text-gray-200' : 'text-gray-500 hover:text-gray-700'}
+              >
+                <X className="w-6 h-6" />
+              </button>
+            </div>
+
+            <form onSubmit={handleAddCategory} className="space-y-4">
+              <div>
+                <label className={`block text-sm font-medium ${darkMode ? 'text-gray-300' : 'text-gray-700'} mb-2`}>Type</label>
+                <div className="grid grid-cols-2 gap-3">
+                  <button
+                    type="button"
+                    onClick={() => setCategoryForm({ ...categoryForm, type: 'expense' })}
+                    className={`px-4 py-2 rounded-lg font-medium transition ${
+                      categoryForm.type === 'expense'
+                        ? 'bg-red-600 text-white'
+                        : darkMode ? 'bg-gray-700 text-gray-300 hover:bg-gray-600' : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
+                    }`}
+                    disabled={editingCategory}
+                  >
+                    Expense
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setCategoryForm({ ...categoryForm, type: 'income' })}
+                    className={`px-4 py-2 rounded-lg font-medium transition ${
+                      categoryForm.type === 'income'
+                        ? 'bg-green-600 text-white'
+                        : darkMode ? 'bg-gray-700 text-gray-300 hover:bg-gray-600' : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
+                    }`}
+                    disabled={editingCategory}
+                  >
+                    Income
+                  </button>
+                </div>
+              </div>
+
+              <div>
+                <label className={`block text-sm font-medium ${darkMode ? 'text-gray-300' : 'text-gray-700'} mb-2`}>Name</label>
+                <input
+                  type="text"
+                  placeholder="e.g., Groceries"
+                  className={`w-full px-4 py-2 border ${darkMode ? 'border-gray-600 bg-gray-700 text-white' : 'border-gray-300'} rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent`}
+                  value={categoryForm.name}
+                  onChange={(e) => setCategoryForm({ ...categoryForm, name: e.target.value })}
+                  required
+                />
+              </div>
+
+              <div>
+                <label className={`block text-sm font-medium ${darkMode ? 'text-gray-300' : 'text-gray-700'} mb-2`}>Icon (Emoji)</label>
+                <input
+                  type="text"
+                  placeholder="📁"
+                  className={`w-full px-4 py-2 border ${darkMode ? 'border-gray-600 bg-gray-700 text-white' : 'border-gray-300'} rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent`}
+                  value={categoryForm.icon}
+                  onChange={(e) => setCategoryForm({ ...categoryForm, icon: e.target.value })}
+                  maxLength={2}
+                />
+              </div>
+
+              <div>
+                <label className={`block text-sm font-medium ${darkMode ? 'text-gray-300' : 'text-gray-700'} mb-2`}>Color</label>
+                <input
+                  type="color"
+                  className={`w-full h-12 px-2 py-1 border ${darkMode ? 'border-gray-600 bg-gray-700' : 'border-gray-300'} rounded-lg cursor-pointer`}
+                  value={categoryForm.color}
+                  onChange={(e) => setCategoryForm({ ...categoryForm, color: e.target.value })}
+                />
+              </div>
+
+              <button
+                type="submit"
+                disabled={loading}
+                className="w-full bg-blue-600 text-white py-3 rounded-lg font-semibold hover:bg-blue-700 transition flex items-center justify-center gap-2 disabled:opacity-50"
+              >
+                <Save className="w-4 h-4" />
+                {loading ? 'Saving...' : (editingCategory ? 'Update' : 'Add')} Category
               </button>
             </form>
           </div>
